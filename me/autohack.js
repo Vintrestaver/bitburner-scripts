@@ -8,10 +8,10 @@ export async function main(ns) {
 
     const FILES = ['grow.script', 'weak.script', 'hack.script'];
     let EXCLUDE = [];
-    const CYCLE = [0, "▁", '▂', '▃', '▄', '▅', '▆', '▇', '█'];//
+    const CYCLE = [0, "▁", '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     const HACK_COMMANDS = ['brutessh', 'ftpcrack', 'relaysmtp', 'httpworm', 'sqlinject'];
     const KEEP_MONEY = ns.fileExists('reserve.txt') ? Number(ns.read('reserve.txt')) : 0;
-    const HAVE_MONEY = ns.getServerMoneyAvailable('home')
+    const HAVE_MONEY = ns.getServerMoneyAvailable('home');
 
     await Promise.all([
         ns.write(FILES[0], 'grow(args[0])', 'w'),
@@ -39,11 +39,10 @@ export async function main(ns) {
     }
 
     function generateLog() {
-        if (CYCLE[0] >= 8) CYCLE[0] = 0;
-        CYCLE[0]++;
+        if (CYCLE[0] >= 8) CYCLE[0]++;
+        else CYCLE[0] = 1;
         ns.clearLog();
 
-        // 优化后的日志头
         ns.print('╔═══╦══════════════════════╦═════════╦══════════════════════╗');
         ns.print(`║ ${CYCLE[CYCLE[0]]} ║      TARGETS         ║  FUNDS  ║ SECURITY & PROGRESS  ║`);
         ns.print('╠═══╬══════════════════════╬═════════╬══════════════════════╣');
@@ -54,29 +53,22 @@ export async function main(ns) {
             const currentMoney = serverInfo.MA(t[1]);
             const ratio = currentMoney / maxMoney || 0;
 
-            // 使用更直观的进度条字符
             const filled = Math.floor(ratio * 10);
             const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
 
-            // 格式化金额显示
             const funds = `$${ns.formatNumber(currentMoney, 1)}`.padEnd(7);
-
-            // 安全等级状态
             const security = serverInfo.SL(t[1]).toFixed(1).padStart(5);
             const minSecurity = serverInfo.MSL(t[1]).toFixed(1).padEnd(5);
 
             ns.print(`║ ${(act[t[1]] || ' ')} ║ ${truncate(t[1]).padEnd(20)} ║ ${funds} ║ ${progressBar}${security}/${minSecurity}║`);
         });
 
-        // 状态栏优化
         ns.print('╠═══╩══════════════════════╩═════════╩══════════════════════╣');
 
-        // EXE进度显示（支持颜色代码）
         const exeStatus = HACK_COMMANDS.map(cmd =>
             exes.includes(cmd) ? '■' : '□'
         ).join('');
 
-        // 主机状态统计
         const hostStats = [
             `HN:${ns.hacknet.numNodes()}`,
             `SV:${ns.getPurchasedServers().length}`,
@@ -115,6 +107,7 @@ export async function main(ns) {
         targets = sortDesc(targets);
         hosts = sortDesc(hosts);
     }
+
     async function allocateResources() {
         for (const [_, host] of hosts) {
             if (host === 'home') continue;
@@ -158,14 +151,13 @@ export async function main(ns) {
         }
     }
 
-    // 新增线程计算函数
     function calculateHackThreads(ns, target, freeRam, cores) {
         const scriptRam = ns.getScriptRam(FILES[2]);
         const maxThreads = Math.floor(freeRam / scriptRam);
         const hackPerThread = ns.hackAnalyze(target);
         if (hackPerThread <= 0) return 0;
 
-        const desiredPercentage = 0.7; // 最大安全窃取比例
+        const desiredPercentage = 0.7;
         const maxSafeThreads = Math.floor(desiredPercentage / hackPerThread);
         return Math.min(maxThreads, maxSafeThreads);
     }
@@ -183,7 +175,6 @@ export async function main(ns) {
         const weakenRam = ns.getScriptRam(FILES[1]);
         let remainingRam = freeRam;
 
-        // 计算需要的grow线程
         let growThreads = 0;
         const currentMoney = serverInfo.MA(target);
         const maxMoney = serverInfo.MM(target);
@@ -194,7 +185,6 @@ export async function main(ns) {
             remainingRam -= growThreads * growRam;
         }
 
-        // 计算需要的weaken线程
         let weakenThreads = 0;
         const securityDiff = serverInfo.SL(target) - serverInfo.MSL(target);
         if (securityDiff > 0) {
@@ -235,12 +225,12 @@ export async function main(ns) {
     while (true) {
         servers = [];
         targets = [];
-        hosts = [[Math.max(serverInfo.MR('home') - 50, 0), 'home']]; // 初始化时仍包含home
+        hosts = [[Math.max(serverInfo.MR('home') - 50, 0), 'home']];
         exes = [];
         tarIndex = 0;
         loop = false;
         act = {};
-        EXCLUDE = [...Array.from({ length: ns.hacknet.numNodes() }, (_, i) => ns.hacknet.getNodeStats(i).name)]
+        EXCLUDE = [...Array.from({ length: ns.hacknet.numNodes() }, (_, i) => ns.hacknet.getNodeStats(i).name)];
 
         if (HAVE_MONEY > KEEP_MONEY) {
             await manageHacknet();
