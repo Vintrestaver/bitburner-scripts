@@ -142,7 +142,7 @@ export async function main(ns) {
     const position = calculatePosition(sym, analysis);
 
     // 多头开仓四因子验证
-    if (analysis.trend === 'bull' && longShares === 0) {
+    if (analysis.trend === 'bull' && longShares <= 0) {
       if (analysis.forecast > CONFIG.FORECAST_BUY &&
         analysis.rsi < 40 &&
         analysis.volatility < CONFIG.VOLATILITY_FILTER) {
