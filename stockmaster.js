@@ -4,63 +4,63 @@ import {
 } from './helpers.js'
 
 let disableShorts = false;
-// 交易配置参数
-let commission = 100000; // 交易佣金。预期利润必须超过此值才会进行买卖
-let totalProfit = 0.0; // 记录脚本启动后的累计收益
-let lastLog = ""; // 仅当有变化时记录日志（股票市场更新频率低于脚本轮询）
-let allStockSymbols = null; // 启动时收集所有股票代码
-let mock = false; // 模拟模式：执行买卖计算但不实际交易
-let noisy = false; // 详细模式：每次买卖操作时显示通知
+let commission = 100000; // Buy/sell commission. Expected profit must exceed this to buy anything.
+let totalProfit = 0.0; // We can keep track of how much we've earned since start.
+let lastLog = ""; // We update faster than the stock-market ticks, but we don't log anything unless there's been a change
+let allStockSymbols = null; // Stores the set of all symbols collected at start
+let mock = false; // If set to true, will "mock" buy/sell but not actually buy/sell anythingorecast
+let noisy = false; // If set to true, tprints and announces each time stocks are bought/sold
+// Pre-4S configuration (influences how we play the stock market before we have 4S data, after which everything's fool-proof)
+let showMarketSummary = false;  // If set to true, will always generate and display the pre-4s forecast table in a separate tail window
+let minTickHistory; // This much history must be gathered before we will offer a stock forecast.
+let longTermForecastWindowLength; // This much history will be used to determine the historical probability of the stock (so long as no inversions are detected)
+let nearTermForecastWindowLength; // This much history will be used to detect recent negative trends and act on them immediately.
+// The following pre-4s constants are hard-coded (not configurable via command line) but may require tweaking
+const marketCycleLength = 75; // Every this many ticks, all stocks have a 45% chance of "reversing" their probability. Something we must detect and act on quick to not lose profits.
+const maxTickHistory = 151; // This much history will be kept for purposes of detemining volatility and perhaps one day pinpointing the market cycle tick
+const inversionDetectionTolerance = 0.10; // If the near-term forecast is within this distance of (1 - long-term forecast), consider it a potential "inversion"
+const inversionLagTolerance = 5; // An inversion is "trusted" up to this many ticks after the normal nearTermForecastWindowLength expected detection time
+// (Note: 33 total stocks * 45% inversion chance each cycle = ~15 expected inversions per cycle)
+// The following pre-4s values are set during the lifetime of the program
+let marketCycleDetected = false; // We should not make risky purchasing decisions until the stock market cycle is detected. This can take a long time, but we'll be thanked
+let detectedCycleTick = 0; // This will be reset to zero once we've detected the market cycle point.
+let inversionAgreementThreshold = 6; // If this many stocks are detected as being in an "inversion", consider this the stock market cycle point
+const expectedTickTime = 6000;
+const catchUpTickTime = 4000;
+let lastTick = 0;
+let sleepInterval = 1000;
+let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information about the current bitnode
+let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)();
 
-// 4S数据获取前的配置参数
-let showMarketSummary = false;  // 始终在独立窗口显示预4S市场预测
-let minTickHistory; // 生成预测所需最小历史数据量
-let longTermForecastWindowLength; // 长期趋势分析窗口长度
-let nearTermForecastWindowLength; // 短期趋势检测窗口长度
-
-// 预4S常量配置（不可通过命令行配置）
-const marketCycleLength = 75; // 市场周期长度（单位：tick），每个周期股票有45%概率反转趋势
-const maxTickHistory = 151; // 最大历史数据保留量（用于波动率分析）
-const inversionDetectionTolerance = 0.10; // 反转检测容差阈值
-const inversionLagTolerance = 5; // 反转检测延迟容差
-let marketCycleDetected = false; // 是否检测到市场周期
-let detectedCycleTick = 0; // 检测到的周期起始点
-let inversionAgreementThreshold = 6; // 触发周期检测的反转股票数量阈值
-
-// 运行时参数
-const expectedTickTime = 6000; // 预期tick间隔（毫秒）
-const catchUpTickTime = 4000; // 追赶模式tick间隔
-let lastTick = 0; // 最后记录tick时间
-let sleepInterval = 1000; // 主循环休眠间隔
-
-// 命令行参数配置表
+let options;
 const argsSchema = [
-    ['l', false], // 停止其他实例并清空所有持仓
-    ['liquidate', false], // 同上（长参数形式）
-    ['mock', false], // 启用模拟交易模式
-    ['noisy', false], // 启用详细交易通知
-    ['disable-shorts', false], // 禁用做空交易（默认根据SF8.2状态自动设置）
-    ['reserve', null], // 保留的固定资金量（不用于交易）
-    ['fracB', 0.4], // 流动资产比例阈值（低于此值才考虑买入）
-    ['fracH', 0.2], // 现金保留比例（买入时保留）
-    ['buy-threshold', 0.0001], // 买入阈值（预期收益率 > 0.01%）
-    ['sell-threshold', 0], // 卖出阈值（预期收益率 < 0%）
-    ['diversification', 0.34], // 单只股票最大持仓比例（预4S模式）
-    ['disableHud', false], // 禁用HUD股票信息显示
-    ['disable-purchase-tix-api', false], // 禁止自动购买TIX API
-    // 预4S模式高级参数
-    ['show-pre-4s-forecast', false], // 始终显示预4S预测界面
-    ['show-market-summary', false], // 显示详细市场摘要（即使持有股票）
-    ['pre-4s-buy-threshold-probability', 0.15], // 预4S最小买入概率差阈值（距0.5）
-    ['pre-4s-buy-threshold-return', 0.0015], // 预4S买入收益率阈值（0.25%）
-    ['pre-4s-sell-threshold-return', 0.0005], // 预4S卖出收益率阈值（0.15%）
-    ['pre-4s-min-tick-history', 21], // 预4S分析所需最小历史数据量
-    ['pre-4s-forecast-window', 51], // 长期趋势分析窗口长度
-    ['pre-4s-inversion-detection-window', 10], // 短期反转检测窗口
-    ['pre-4s-min-blackout-window', 10], // 周期点前禁止买入窗口
-    ['pre-4s-minimum-hold-time', 10], // 最小持仓时间（避免误操作）
-    ['buy-4s-budget', 0.8], // 购买4S数据的最大资金占比（0为禁用）
+    ['l', false], // Stop any other running stockmaster.js instances and sell all stocks
+    ['liquidate', false], // Long-form alias for the above flag.
+    ['mock', false], // If set to true, will "mock" buy/sell but not actually buy/sell anything
+    ['noisy', false], // If set to true, tprints and announces each time stocks are bought/sold
+    ['disable-shorts', false], // If set to true, will not short any stocks. Will be set depending on having SF8.2 by default.
+    ['reserve', null], // A fixed amount of money to not spend
+    ['fracB', 0.4], // Fraction of assets to have as liquid before we consider buying more stock
+    ['fracH', 0.2], // Fraction of assets to retain as cash in hand when buying
+    ['buy-threshold', 0.0001], // Buy only stocks forecasted to earn better than a 0.01% return (1 Basis Point)
+    ['sell-threshold', 0], // Sell stocks forecasted to earn less than this return (default 0% - which happens when prob hits 50% or worse)
+    ['diversification', 0.34], // Before we have 4S data, we will not hold more than this fraction of our portfolio as a single stock
+    ['disableHud', false], // Disable showing stock value in the HUD panel
+    ['disable-purchase-tix-api', false], // Disable purchasing the TIX API if you do not already have it.
+    // The following settings are related only to tweaking pre-4s stock-market logic
+    ['show-pre-4s-forecast', false], // If set to true, will always generate and display the pre-4s forecast (if false, it's only shown while we hold no stocks)
+    ['show-market-summary', false], // Same effect as "show-pre-4s-forecast", this market summary has become so informative, it's valuable even with 4s
+    ['pre-4s-buy-threshold-probability', 0.15], // Before we have 4S data, only buy stocks whose probability is more than this far away from 0.5, to account for imprecision
+    ['pre-4s-buy-threshold-return', 0.0015], // Before we have 4S data, Buy only stocks forecasted to earn better than this return (default 0.25% or 25 Basis Points)
+    ['pre-4s-sell-threshold-return', 0.0005], // Before we have 4S data, Sell stocks forecasted to earn less than this return (default 0.15% or 15 Basis Points)
+    ['pre-4s-min-tick-history', 21], // This much history must be gathered before we will use pre-4s stock forecasts to make buy/sell decisions. (Default 21)
+    ['pre-4s-forecast-window', 51], // This much history will be used to determine the historical probability of the stock (so long as no inversions are detected) (Default 76)
+    ['pre-4s-inversion-detection-window', 10], // This much history will be used to detect recent negative trends and act on them immediately. (Default 10)
+    ['pre-4s-min-blackout-window', 10], // Do not make any new purchases this many ticks before the detected stock market cycle tick, to avoid buying a position that reverses soon after
+    ['pre-4s-minimum-hold-time', 10], // A recently bought position must be held for this long before selling, to avoid rash decisions due to noise after a fresh market cycle. (Default 10)
+    ['buy-4s-budget', 0.8], // Maximum corpus value we will sacrifice in order to buy 4S. Setting to 0 will never buy 4s.
 ];
+
 export function autocomplete(data, args) {
     data.flags(argsSchema);
     return [];
