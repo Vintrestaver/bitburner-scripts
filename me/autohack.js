@@ -1,10 +1,10 @@
 /** @param {NS} ns**/
 export async function main(ns) {
     ns.disableLog('ALL');
-    ns.setTitle('AutoHack v2.1');
-    ns.tail();
-    ns.resizeTail(600, 420);
-    ns.moveTail(1000, 0);
+    ns.ui.setTailTitle('AutoHack v2.1');
+    ns.ui.openTail();
+    ns.ui.resizeTail(570, 420);
+    ns.ui.moveTail(1000, 0);
 
     const FILES = ['grow.script', 'weak.script', 'hack.script'];
     let EXCLUDE = [];
@@ -39,13 +39,13 @@ export async function main(ns) {
     }
 
     function generateLog() {
-        if (CYCLE[0] >= 8) CYCLE[0]++;
-        else CYCLE[0] = 1;
+        if (CYCLE[0] >= 8) CYCLE[0] = 0;
+        CYCLE[0]++;
         ns.clearLog();
 
-        ns.print('╔═══╦══════════════════════╦═════════╦══════════════════════╗');
-        ns.print(`║ ${CYCLE[CYCLE[0]]} ║      TARGETS         ║  FUNDS  ║ SECURITY & PROGRESS  ║`);
-        ns.print('╠═══╬══════════════════════╬═════════╬══════════════════════╣');
+        ns.print('╔═══╦═══════════════════╦═══════════╦════════════════════╗');
+        ns.print(`║ ${CYCLE[CYCLE[0]]} ║      TARGETS      ║ SECURITY  ║  PROGRESS & FUNDS  ║`);
+        ns.print('╠═══╬═══════════════════╬═══════════╬════════════════════╣');
 
         const topTargets = targets.slice(0, 10);
         topTargets.forEach(t => {
@@ -60,10 +60,10 @@ export async function main(ns) {
             const security = serverInfo.SL(t[1]).toFixed(1).padStart(5);
             const minSecurity = serverInfo.MSL(t[1]).toFixed(1).padEnd(5);
 
-            ns.print(`║ ${(act[t[1]] || ' ')} ║ ${truncate(t[1]).padEnd(20)} ║ ${funds} ║ ${progressBar}${security}/${minSecurity}║`);
+            ns.print(`║ ${(act[t[1]] || ' ')} ║ ${truncate(t[1]).padEnd(17)} ║${security}/${minSecurity}║ ${progressBar} ${funds} ║`);
         });
 
-        ns.print('╠═══╩══════════════════════╩═════════╩══════════════════════╣');
+        ns.print('╠═══╩═══════════════════╩═══════════╩════════════════════╣');
 
         const exeStatus = HACK_COMMANDS.map(cmd =>
             exes.includes(cmd) ? '■' : '□'
@@ -76,8 +76,8 @@ export async function main(ns) {
             `TG:${targets.length}`
         ].join('  ');
 
-        ns.print(`║ EXE:${exeStatus}  ${hostStats.padEnd(47)}║`);
-        ns.print('╚═══════════════════════════════════════════════════════════╝');
+        ns.print(`║ EXE:${exeStatus}  ${hostStats.padEnd(44)}║`);
+        ns.print('╚════════════════════════════════════════════════════════╝');
     }
 
     async function scanNetwork(host, current) {
@@ -208,8 +208,7 @@ export async function main(ns) {
     async function manageServers() {
         let A = []
         for (let i = 0; i < 20; i++)  A.push(2 ** i);
-        const maxRam = A.findLast(ram =>
-            checkFunds(ns.getPurchasedServerCost(ram), 50));
+        const maxRam = A.findLast(ram => checkFunds(ns.getPurchasedServerCost(ram), 50));
         if (ns.getPurchasedServers().length < 25 && maxRam) {
             ns.purchaseServer('daemon', maxRam);
         }
@@ -236,6 +235,7 @@ export async function main(ns) {
             await manageHacknet();
             await manageServers();
         }
+
         await updateExes();
         await scanNetwork('', 'home');
         await allocateResources();

@@ -1,6 +1,6 @@
 /** 
- * Bitburner 股票自动交易脚本 v6.1
- * 新增市场预测指标+四因子量化模型
+ * Bitburner 股票自动交易脚本 v6.2
+ * 新增盈亏值显示+风险管理增强
  * @param {NS} ns 
  **/
 export async function main(ns) {
@@ -39,11 +39,11 @@ export async function main(ns) {
 
   // ===================== 初始化 =====================
   ns.disableLog("ALL");
-  ns.setTitle("🚀量子交易系统 v6.1")
-  ns.tail();                       // 打开独立显示窗口
-  ns.resizeTail(680, 500);
-  ns.moveTail(1100, 0);
-  ns.print("加载中...");
+  ns.ui.setTailTitle("StockManager v6.2");
+  ns.ui.openTail();                    // 打开独立显示窗口
+  ns.ui.resizeTail(680, 500);
+  ns.ui.moveTail(1100, 0);
+  ns.print("Loading...");
 
   // 初始化历史数据结构
   for (const sym of STATE.symbols) {
@@ -165,23 +165,29 @@ export async function main(ns) {
     }
   }
 
-  /** 仓位管理 */
+  /** 仓位管理（增加盈亏计算）*/
   function managePosition(sym, analysis) {
     const [long, longAvg, short, shortAvg] = ns.stock.getPosition(sym);
 
     if (long > 0) {
-      const profitRatio = (analysis.bidPrice - longAvg) / longAvg;
+      const currentPrice = analysis.bidPrice;
+      const profit = long * (currentPrice - longAvg); // 计算多单盈亏
+      const profitRatio = (currentPrice - longAvg) / longAvg;
+
       if (profitRatio <= -CONFIG.STOP_LOSS || profitRatio >= CONFIG.TAKE_PROFIT) {
         const sold = ns.stock.sellStock(sym, long);
-        if (sold > 0) logTransaction('平多', sym, -long, analysis.bidPrice);
+        if (sold > 0) logTransaction('平多', sym, -long, currentPrice, profit);
       }
     }
 
     if (short > 0) {
-      const profitRatio = (shortAvg - analysis.askPrice) / shortAvg;
+      const currentPrice = analysis.askPrice;
+      const profit = short * (shortAvg - currentPrice); // 计算空单盈亏
+      const profitRatio = (shortAvg - currentPrice) / shortAvg;
+
       if (profitRatio <= -CONFIG.STOP_LOSS || profitRatio >= CONFIG.TAKE_PROFIT) {
         const bought = ns.stock.sellShort(sym, short);
-        if (bought > 0) logTransaction('平空', sym, -short, analysis.askPrice);
+        if (bought > 0) logTransaction('平空', sym, -short, currentPrice, profit);
       }
     }
   }
@@ -203,53 +209,69 @@ export async function main(ns) {
   }
 
   // ===================== 增强仪表盘 =====================
-  /** 显示交易控制面板 */
+  /** 显示交易控制面板（增加盈亏显示）*/
   function displayDashboard(ns) {
-    ns.print("╒═══════════════════════════ 量子交易面板 ═══════════════════════════╕");
+    ns.print(`╒═══════════════════════ 量子交易面板 ${formatTime()} ══════════════════════╕`);
     ns.print([
-      `│ ⏰${formatTime()}`,
-      `💰净值 ${fmtMoney(getNetWorth()).padEnd(8)}`,
-      `风险 ${fmtPct(getRisk())}`,
-      `杠杆 ${getLeverage().toFixed(1)}x │`
-    ].join(' │ ').padEnd(62) + '│')
+      `│ 净值 ${fmtMoney(getNetWorth())}`,
+      `总利 ${fmtMoney(STATE.metrics.totalProfit)}`, // 新增总盈利
+      `回撤 ${fmtPct(STATE.metrics.maxDrawdown)}`,
+      `杠杆 ${getLeverage().toFixed(1)}x`,
+      `风险 ${getRisk().toFixed(1)}`
+    ].join(' │ ').padEnd(87) + '│')
     ns.print("╞══════════════════════════════════════════════════════════════════╡");
 
     ns.print("├───────────────────────────📦 核心持仓 ────────────────────────────┤");
     getActivePositions().slice(0, 10).forEach((p, i) =>
-      ns.print(` ${fmtPos(ns, p, i + 1)} `)
+      ns.print(`${fmtPos(p, i + 1)}`.padEnd(76) + '│')
     );
 
     ns.print("├───────────────────────────🔔 最新交易 ────────────────────────────┤");
-    STATE.transactions.slice(-3).forEach(t =>
-      ns.print(` ${t.time} ${t.icon} ${t.sym} ${fmtNum(t.shares, 2)}股 @ ${fmtMoney(t.price)} `)
-    );
+    STATE.transactions.slice(-3).forEach(t => {
+      const profitDisplay = t.profit !== 0 ?
+        `${t.profit > 0 ? '💰+' : '💸'}${fmtMoney(t.profit)}` : '';
+      ns.print(`│ ${t.time} ${t.icon} ${t.sym} ` +
+        `${fmtNum(Math.abs(t.shares))}股 @ ${fmtMoney(t.price)} ` +
+        profitDisplay.padEnd(12));
+    });
 
     ns.print("╘══════════════════════════════════════════════════════════════════╛");
   }
 
   /** 格式化持仓信息 */
-  function fmtPos(ns, pos, idx) {
+  function fmtPos(pos, idx) {
     const icon = pos.trend === 'bull' ? '▲' : '▽';
-    const forecastColor = pos.forecast > 0.6 ? '🟢' : pos.forecast < 0.4 ? '🔴' : '⚪';
+    const forecastColor = pos.forecast > 0.6 ? '↗' : pos.forecast < 0.4 ? '↘' : '—';
     return [
-      `${idx.toString().padStart(2)}. ${pos.sym.padEnd(5)} ${icon}`,
-      `预测${forecastColor} ${fmtPct(pos.forecast).padEnd(5)}`,
+      `│${idx.toString().padStart(2)}. ${pos.sym.padEnd(5)} ${icon}`,
+      `预测 ${forecastColor} ${fmtPct(pos.forecast).padEnd(5)}`,
       `RSI ${pos.rsi.toFixed(0).padEnd(3)}`,
       `波动 ${fmtPct(pos.volatility).padEnd(4)}`,
       `持仓 ${fmtMoney(pos.value).padEnd(8)}`
-    ].join(' │ ').padEnd(61);
+    ].join(' │ ');
   }
 
   // ===================== 工具函数 =====================
-  /** 记录交易日志 */
-  function logTransaction(icon, sym, shares, price) {
-    STATE.transactions.push({
+  /** 记录交易日志（增加profit参数）*/
+  function logTransaction(icon, sym, shares, price, profit = 0) {
+    const record = {
       time: new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 8),
       icon: icon,
       sym: sym,
       shares: shares,
-      price: price
-    });
+      price: price,
+      profit: profit  // 新增盈亏字段
+    };
+    STATE.transactions.push(record);
+
+    // 更新总盈利（仅平仓交易）
+    if (profit !== 0) {
+      STATE.metrics.totalProfit += profit;
+      // 更新最大回撤
+      STATE.metrics.peakNetWorth = Math.max(STATE.metrics.peakNetWorth, getNetWorth());
+      const drawdown = (STATE.metrics.peakNetWorth - getNetWorth()) / STATE.metrics.peakNetWorth;
+      STATE.metrics.maxDrawdown = Math.max(STATE.metrics.maxDrawdown, drawdown);
+    }
   }
 
   /** 计算总净值 */
@@ -326,8 +348,11 @@ export async function main(ns) {
     STATE.metrics.winRate = wins / (STATE.transactions.length || 1);
   }
 
-  // 格式化工具
-  function fmtMoney(num) { return (num < 0 ? '-$' : '$') + ns.formatNumber(Math.abs(num), 2) }
+  /** 改进的金额格式化（支持盈亏颜色）*/
+  function fmtMoney(num) {
+    const color = num >= 0 ? '\x1b[38;5;82m' : '\x1b[38;5;196m';
+    return `${color}${num < 0 ? '-$' : '$'}${ns.formatNumber(Math.abs(num), 2)}\x1b[0m`;
+  }
   function fmtNum(num) { return ns.formatNumber(num, 0) }
   function fmtPct(num) { return ns.formatPercent(num, 1) }
   function formatTime() { return new Date().toLocaleTimeString('zh-CN', { hour12: false }); }
