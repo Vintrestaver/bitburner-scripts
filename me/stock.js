@@ -218,12 +218,12 @@ export async function main(ns) {
       `回撤 ${fmtPct(STATE.metrics.maxDrawdown)}`,
       `杠杆 ${getLeverage().toFixed(1)}x`,
       `风险 ${getRisk().toFixed(1)}`
-    ].join(' │ ').padEnd(87) + '│')
+    ].join(' │ ').padEnd(88) + '│')
     ns.print("╞══════════════════════════════════════════════════════════════════╡");
 
     ns.print("├───────────────────────────📦 核心持仓 ────────────────────────────┤");
     getActivePositions().slice(0, 10).forEach((p, i) =>
-      ns.print(`${fmtPos(p, i + 1)}`.padEnd(76) + '│')
+      ns.print(`${fmtPos(p, i + 1)}`.padEnd(77) + '│')
     );
 
     ns.print("├───────────────────────────🔔 最新交易 ────────────────────────────┤");

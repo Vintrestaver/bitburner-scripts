@@ -1,7 +1,7 @@
 /** @param {NS} ns**/
 export async function main(ns) {
     ns.disableLog('ALL');
-    ns.ui.setTailTitle('AutoHack v2.1');
+    ns.ui.setTailTitle('AutoHack v2.5');
     ns.ui.openTail();
     ns.ui.resizeTail(570, 420);
     ns.ui.moveTail(1000, 0);
