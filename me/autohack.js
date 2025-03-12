@@ -1,17 +1,17 @@
 /** @param {NS} ns**/
 export async function main(ns) {
     ns.disableLog('ALL');
-    ns.ui.setTailTitle('AutoHack v2.5');
+    ns.ui.setTailTitle(`AutoHack v2.5 [${ns.getScriptName()}]`);
     ns.ui.openTail();
+    const [W, H] = ns.ui.windowSize()
     ns.ui.resizeTail(570, 420);
-    ns.ui.moveTail(1000, 0);
+    ns.ui.moveTail(W - 570 - 250, 0);
+
 
     const FILES = ['grow.script', 'weak.script', 'hack.script'];
     let EXCLUDE = [];
     const CYCLE = [0, "▁", '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     const HACK_COMMANDS = ['brutessh', 'ftpcrack', 'relaysmtp', 'httpworm', 'sqlinject'];
-    const KEEP_MONEY = ns.fileExists('reserve.txt') ? Number(ns.read('reserve.txt')) : 0;
-    const HAVE_MONEY = ns.getServerMoneyAvailable('home');
 
     await Promise.all([
         ns.write(FILES[0], 'grow(args[0])', 'w'),
@@ -19,7 +19,6 @@ export async function main(ns) {
         ns.write(FILES[2], 'hack(args[0])', 'w')
     ]);
     let servers, hosts, targets, exes, tarIndex, loop, hType, act;
-    const checkFunds = (cost, divisor) => cost < (HAVE_MONEY / divisor);
     const sortDesc = arr => arr.sort((a, b) => b[0] - a[0]);
     const truncate = s => s.length > 14 ? s.substring(0, 14) + '...' : s;
 
@@ -195,32 +194,6 @@ export async function main(ns) {
         return [growThreads, weakenThreads];
     }
 
-    async function manageHacknet() {
-        if (checkFunds(ns.hacknet.getPurchaseNodeCost(), 50)) ns.hacknet.purchaseNode();
-        for (let i = 0; i < ns.hacknet.numNodes(); i++) {
-            ['Level', 'Ram', 'Core'].forEach(prop => {
-                const cost = ns.hacknet[`get${prop}UpgradeCost`](i);
-                if (checkFunds(cost, 50)) ns.hacknet[`upgrade${prop}`](i);
-            });
-        }
-    }
-
-    async function manageServers() {
-        let A = []
-        for (let i = 0; i < 20; i++)  A.push(2 ** i);
-        const maxRam = A.findLast(ram => checkFunds(ns.getPurchasedServerCost(ram), 50));
-        if (ns.getPurchasedServers().length < 25 && maxRam) {
-            ns.purchaseServer('daemon', maxRam);
-        }
-        ns.getPurchasedServers().reverse().forEach(server => {
-            if (serverInfo.MR(server) < maxRam && checkFunds(ns.getPurchasedServerCost(maxRam), 50)) {
-                ns.killall(server);
-                ns.deleteServer(server);
-                ns.purchaseServer('daemon', maxRam);
-            }
-        });
-    }
-
     while (true) {
         servers = [];
         targets = [];
@@ -230,11 +203,6 @@ export async function main(ns) {
         loop = false;
         act = {};
         EXCLUDE = [...Array.from({ length: ns.hacknet.numNodes() }, (_, i) => ns.hacknet.getNodeStats(i).name)];
-
-        if (HAVE_MONEY > KEEP_MONEY) {
-            await manageHacknet();
-            await manageServers();
-        }
 
         await updateExes();
         await scanNetwork('', 'home');
