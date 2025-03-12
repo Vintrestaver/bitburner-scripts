@@ -1,35 +1,35 @@
 /** 
- * Bitburner 股票自动交易脚本 v6.2
+ * Bitburner 股票自动交易脚本 v6.5
  * 新增盈亏值显示+风险管理增强
  * @param {NS} ns 
  **/
 export async function main(ns) {
   // ===================== 核心配置 =====================
-  // const min = ns.stock.getConstants().msPerStockUpdateMin;
-  // const max = ns.stock.getConstants().msPerStockUpdate;
-
+  const UPMAX = ns.stock.getConstants().msPerStockUpdate;
+  const UPMIN = ns.stock.getConstants().msPerStockUpdateMin;
+  const UPDATE = ns.stock.getBonusTime() > UPMAX ? UPMIN : UPMAX;
   const CONFIG = {
-    RISK_PER_TRADE: 0.02,          // 单笔交易风险比例（占账户总资金）
-    MAX_EXPOSURE: 0.8,             // 最大持仓比例（总仓位限制）
-    TREND_WINDOW: 5,               // 短期均线窗口（趋势判断）
-    BASE_WINDOW: 20,               // 长期均线窗口（基线判断）
-    RSI_WINDOW: 14,                // RSI计算窗口（超买超卖指标）
-    VOLATILITY_FILTER: 0.4,        // 波动率过滤阈值（筛选稳定标的）
-    STOP_LOSS: 0.08,               // 动态止损比例（亏损5%平仓）
-    TAKE_PROFIT: 0.15,             // 动态止盈比例（盈利15%平仓）
-    // REFRESH_INTERVAL: Math.floor(Math.random() * (max - min + 1)) + min,
-    ENABLE_SHORT: true,            // 启用做空（允许空头交易）
-    MAX_SHARE_RATIO: 0.1,          // 最大持股比例（单标的最大持股比例）
-    FORECAST_BUY: 0.60,            // 多头预测阈值（新增配置）
-    FORECAST_SELL: 0.40            // 空头预测阈值（新增配置）
+    RISK_PER_TRADE: 0.05,           // 单笔交易风险比例（占账户总资金）
+    MAX_EXPOSURE: 0.8,              // 最大持仓比例（总仓位限制）
+    TREND_WINDOW: 10,               // 短期均线窗口（趋势判断）
+    BASE_WINDOW: 51,                // 长期均线窗口（基线判断）
+    RSI_WINDOW: 21,                 // RSI计算窗口（超买超卖指标）
+    VOLATILITY_FILTER: 0.5,         // 波动率过滤阈值（筛选稳定标的）
+    STOP_LOSS: 0.05,                // 动态止损比例（亏损5%平仓）
+    TAKE_PROFIT: 0.20,              // 动态止盈比例（盈利20%平仓）
+    ENABLE_SHORT: true,             // 启用做空（允许空头交易）
+    MAX_SHARE_RATIO: 0.5,           // 最大持股比例（单标的最大持股比例）
+    FORECAST_BUY: 0.60,             // 多头预测阈值（新增配置）
+    FORECAST_SELL: 0.40,            // 空头预测阈值（新增配置）
+    COMMISSION_FEE: ns.stock.getConstants().StockMarketCommission  //交易手续费
   };
 
   // ===================== 全局状态 =====================
   const STATE = {
     symbols: ns.stock.getSymbols(), // 获取所有股票代码
-    history: new Map(),            // 历史价格数据（存储各股票技术指标）
-    transactions: [],              // 交易记录（用于统计和显示）
-    metrics: {                     // 性能指标（跟踪系统表现）
+    history: new Map(),             // 历史价格数据（存储各股票技术指标）
+    transactions: [],               // 交易记录（用于统计和显示）
+    metrics: {                      // 性能指标（跟踪系统表现）
       totalProfit: 0,
       winRate: 0,
       maxDrawdown: 0,
@@ -39,10 +39,10 @@ export async function main(ns) {
 
   // ===================== 初始化 =====================
   ns.disableLog("ALL");
-  ns.ui.setTailTitle("StockManager v6.2");
-  ns.ui.openTail();                    // 打开独立显示窗口
-  ns.ui.resizeTail(680, 500);
-  ns.ui.moveTail(1100, 0);
+  ns.ui.setTailTitle(`StockManager v6.5 [${ns.getScriptName()}]`);
+  ns.ui.openTail();               // 打开独立显示窗口
+  const [W, H] = ns.ui.windowSize();
+  ns.ui.moveTail(W - 680 - 300, 0);
   ns.print("Loading...");
 
   // 初始化历史数据结构
@@ -67,8 +67,7 @@ export async function main(ns) {
       await ns.sleep(5000);
       continue;
     };
-    await ns.stock.nextUpdate()
-    // await ns.sleep(CONFIG.REFRESH_INTERVAL);
+
     ns.clearLog();
 
     try {
@@ -83,11 +82,15 @@ export async function main(ns) {
       });
 
       updateMetrics();
-      displayDashboard(ns);
+      displayDashboard();
 
     } catch (e) {
       handleError(ns, e);
     }
+    let A = getActivePositions().slice(0, 5).length;
+    let B = STATE.transactions.slice(-10).length;
+    ns.ui.resizeTail(680, (A + B + 5) * 27.5);
+    await ns.stock.nextUpdate();
   }
 
   // ===================== 核心功能 =====================
@@ -97,7 +100,7 @@ export async function main(ns) {
     const price = ns.stock.getPrice(sym);
 
     data.prices.push(price);
-    if (data.prices.length > 100) data.prices.shift();
+    if (data.prices.length > 150) data.prices.shift();
 
     updateMA(data, 'maShort', CONFIG.TREND_WINDOW, price);
     updateMA(data, 'maLong', CONFIG.BASE_WINDOW, price);
@@ -142,7 +145,7 @@ export async function main(ns) {
     const position = calculatePosition(sym, analysis);
 
     // 多头开仓四因子验证
-    if (analysis.trend === 'bull' && longShares <= 0) {
+    if (analysis.trend === 'bull' || longShares <= 0) {
       if (analysis.forecast > CONFIG.FORECAST_BUY &&
         analysis.rsi < 40 &&
         analysis.volatility < CONFIG.VOLATILITY_FILTER) {
@@ -150,17 +153,17 @@ export async function main(ns) {
         if (cost > ns.getServerMoneyAvailable('home')) return;
 
         const bought = ns.stock.buyStock(sym, position);
-        if (bought > 0) logTransaction('📈多', sym, bought, analysis.askPrice);
+        if (bought > 0) logTransaction('Buy 📈', sym, bought, analysis.askPrice);
       }
     }
 
     // 空头开仓四因子验证
-    if (CONFIG.ENABLE_SHORT && analysis.trend === 'bear' && shortShares === 0) {
+    if (CONFIG.ENABLE_SHORT && (analysis.trend === 'bear' || shortShares === 0)) {
       if (analysis.forecast < CONFIG.FORECAST_SELL &&
         analysis.rsi > 60 &&
         analysis.volatility < CONFIG.VOLATILITY_FILTER) {
         const sold = ns.stock.buyShort(sym, position);
-        if (sold > 0) logTransaction('📉空', sym, sold, analysis.bidPrice);
+        if (sold > 0) logTransaction('Buy 📉', sym, sold, analysis.bidPrice);
       }
     }
   }
@@ -176,7 +179,7 @@ export async function main(ns) {
 
       if (profitRatio <= -CONFIG.STOP_LOSS || profitRatio >= CONFIG.TAKE_PROFIT) {
         const sold = ns.stock.sellStock(sym, long);
-        if (sold > 0) logTransaction('平多', sym, -long, currentPrice, profit);
+        if (sold > 0) logTransaction('Sell📈', sym, -long, currentPrice, profit);
       }
     }
 
@@ -187,7 +190,7 @@ export async function main(ns) {
 
       if (profitRatio <= -CONFIG.STOP_LOSS || profitRatio >= CONFIG.TAKE_PROFIT) {
         const bought = ns.stock.sellShort(sym, short);
-        if (bought > 0) logTransaction('平空', sym, -short, currentPrice, profit);
+        if (bought > 0) logTransaction('Sell📉', sym, -short, currentPrice, profit);
       }
     }
   }
@@ -210,45 +213,58 @@ export async function main(ns) {
 
   // ===================== 增强仪表盘 =====================
   /** 显示交易控制面板（增加盈亏显示）*/
-  function displayDashboard(ns) {
-    ns.print(`╒═══════════════════════ 量子交易面板 ${formatTime()} ══════════════════════╕`);
+  function displayDashboard() {
+    ns.print("═".repeat(70))
     ns.print([
-      `│ 净值 ${fmtMoney(getNetWorth())}`,
-      `总利 ${fmtMoney(STATE.metrics.totalProfit)}`, // 新增总盈利
-      `回撤 ${fmtPct(STATE.metrics.maxDrawdown)}`,
-      `杠杆 ${getLeverage().toFixed(1)}x`,
-      `风险 ${getRisk().toFixed(1)}`
-    ].join(' │ ').padEnd(88) + '│')
-    ns.print("╞══════════════════════════════════════════════════════════════════╡");
+      ` NET: ${fmtMoney(getNetWorth())}`,
+      `PRO: ${fmtMoney(STATE.metrics.totalProfit)}`,
+      `DRA: ${fmtPct(STATE.metrics.maxDrawdown)}`,
+      `LEV: ${getLeverage().toFixed(1).padStart(4)}x`,
+      `RIS: ${getRisk().toFixed(1).padEnd(4)}`
+    ].join(' | '))
+    ns.print("═".repeat(70));
 
-    ns.print("├───────────────────────────📦 核心持仓 ────────────────────────────┤");
-    getActivePositions().slice(0, 10).forEach((p, i) =>
-      ns.print(`${fmtPos(p, i + 1)}`.padEnd(77) + '│')
+    ns.print("──📦 Position ────────────────────────────────────────────────────────");
+    getActivePositions().slice(0, 5).forEach((p, i) =>
+      ns.print(`${fmtPos(p, i + 1)}`)
     );
 
-    ns.print("├───────────────────────────🔔 最新交易 ────────────────────────────┤");
-    STATE.transactions.slice(-3).forEach(t => {
+    ns.print("──📜 Latest Transactions ─────────────────────────────────────────────");
+    STATE.transactions.slice(-10).forEach(t => {
       const profitDisplay = t.profit !== 0 ?
-        `${t.profit > 0 ? '💰+' : '💸'}${fmtMoney(t.profit)}` : '';
-      ns.print(`│ ${t.time} ${t.icon} ${t.sym} ` +
-        `${fmtNum(Math.abs(t.shares))}股 @ ${fmtMoney(t.price)} ` +
-        profitDisplay.padEnd(12));
+        `${t.profit > 0 ? '💰' : '💸'}${fmtMoney(t.profit)}` : ' '.repeat(10);
+      ns.print(` ${t.time} ${t.icon.padEnd(5)} ${t.sym.padEnd(5)} ` +
+        `${fmtNum(Math.abs(t.shares))} @ ${fmtMoney(t.price)} ` + profitDisplay);
     });
-
-    ns.print("╘══════════════════════════════════════════════════════════════════╛");
   }
 
   /** 格式化持仓信息 */
   function fmtPos(pos, idx) {
-    const icon = pos.trend === 'bull' ? '▲' : '▽';
-    const forecastColor = pos.forecast > 0.6 ? '↗' : pos.forecast < 0.4 ? '↘' : '—';
+    // 计算多空仓位价值
+    const longValue = pos.long[0] * pos.bid;
+    const shortValue = pos.short[0] * (pos.short[1] - pos.ask);
+
+    // 构建仓位显示字符串
+    const icon = pos.trend === 'bull' ? '🐂' : '🐻';
+    const longDisplay = pos.long[0] > 0 ?
+      `L: ${fmtNum(pos.long[0])} [${fmtMoney(longValue)}]` : '';
+    const shortDisplay = pos.short[0] > 0 ?
+      `S: ${fmtNum(pos.short[0])} [${fmtMoney(shortValue)}]` : '';
+
+    // 仓位比例计算 
+    const longRatio = pos.long[0] / pos.maxShares;
+    const shortRatio = pos.short[0] / pos.maxShares;
+    const ratioBar = '📈' + '▰'.repeat(Math.floor(longRatio * 5)) +
+      '▱'.repeat(5 - Math.floor(longRatio * 5)) + '|📉' +
+      '▰'.repeat(Math.floor(shortRatio * 5)) +
+      '▱'.repeat(5 - Math.floor(shortRatio * 5));
+
     return [
-      `│${idx.toString().padStart(2)}. ${pos.sym.padEnd(5)} ${icon}`,
-      `预测 ${forecastColor} ${fmtPct(pos.forecast).padEnd(5)}`,
+      ` ${idx.toString().padStart(2)}.${pos.sym.padEnd(5)} ${icon}`,
+      `${ratioBar}`,
       `RSI ${pos.rsi.toFixed(0).padEnd(3)}`,
-      `波动 ${fmtPct(pos.volatility).padEnd(4)}`,
-      `持仓 ${fmtMoney(pos.value).padEnd(8)}`
-    ].join(' │ ');
+      `${longDisplay}${shortDisplay}`
+    ].filter(x => x).join(' │ ');
   }
 
   // ===================== 工具函数 =====================
@@ -266,7 +282,7 @@ export async function main(ns) {
 
     // 更新总盈利（仅平仓交易）
     if (profit !== 0) {
-      STATE.metrics.totalProfit += profit;
+      STATE.metrics.totalProfit += profit - CONFIG.COMMISSION_FEE * 2;
       // 更新最大回撤
       STATE.metrics.peakNetWorth = Math.max(STATE.metrics.peakNetWorth, getNetWorth());
       const drawdown = (STATE.metrics.peakNetWorth - getNetWorth()) / STATE.metrics.peakNetWorth;
@@ -279,8 +295,8 @@ export async function main(ns) {
     let total = ns.getServerMoneyAvailable('home');
     for (const sym of STATE.symbols) {
       const [long, lAvg, short, sAvg] = ns.stock.getPosition(sym);
-      total += long * ns.stock.getBidPrice(sym);
-      total += short * (sAvg - ns.stock.getAskPrice(sym));
+      total += long * ns.stock.getBidPrice(sym) - CONFIG.COMMISSION_FEE * 2;
+      total += short * (sAvg - ns.stock.getAskPrice(sym)) - CONFIG.COMMISSION_FEE * 2;
     }
     return total;
   }
@@ -309,17 +325,21 @@ export async function main(ns) {
   /** 获取有效持仓列表 */
   function getActivePositions() {
     return STATE.symbols.map(sym => {
-      const [long] = ns.stock.getPosition(sym);
-      if (long === 0) return null;
+      const [long, lAvg, short, sAvg] = ns.stock.getPosition(sym);
+      if (long === 0 && short === 0) return null;
       const analysis = analyzeStock(sym);
+
       return {
         sym: sym,
         trend: analysis.trend,
-        price: analysis.bidPrice,
+        bid: analysis.bidPrice,
+        ask: analysis.askPrice,
         rsi: analysis.rsi,
         volatility: analysis.volatility,
-        value: long * analysis.bidPrice,
-        forecast: analysis.forecast
+        forecast: analysis.forecast,
+        long: [long, lAvg],
+        short: [short, sAvg],
+        maxShares: ns.stock.getMaxShares(sym)
       };
     }).filter(p => p !== null);
   }
@@ -350,11 +370,11 @@ export async function main(ns) {
 
   /** 改进的金额格式化（支持盈亏颜色）*/
   function fmtMoney(num) {
-    const color = num >= 0 ? '\x1b[38;5;82m' : '\x1b[38;5;196m';
-    return `${color}${num < 0 ? '-$' : '$'}${ns.formatNumber(Math.abs(num), 2)}\x1b[0m`;
+    const color = num >= 0 ? '' : '\x1b[38;5;196m';
+    return `${color}$${ns.formatNumber(Math.abs(num), 1).padEnd(6)}\x1b[0m`;
   }
-  function fmtNum(num) { return ns.formatNumber(num, 0) }
-  function fmtPct(num) { return ns.formatPercent(num, 1) }
-  function formatTime() { return new Date().toLocaleTimeString('zh-CN', { hour12: false }); }
-  function handleError(ns, error) { ns.print(`⚠️ 错误: ${error}`); }
+  function fmtNum(num) { return ns.formatNumber(num, 1).padStart(6, '_') }
+  function fmtPct(num) { return ns.formatPercent(num, 1).padEnd(5) }
+  function fmtTime() { return new Date().toLocaleTimeString('zh-CN', { hour12: false }); }
+  function handleError(ns, error) { ns.print(`\x1b[38;5;196m⚠️ 错误: ${error}\x1b[0m`); }
 }
