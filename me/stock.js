@@ -9,18 +9,18 @@ export async function main(ns) {
   const UPMIN = ns.stock.getConstants().msPerStockUpdateMin;
   const UPDATE = ns.stock.getBonusTime() > UPMAX ? UPMIN : UPMAX;
   const CONFIG = {
-    RISK_PER_TRADE: 0.05,           // 单笔交易风险比例（占账户总资金）
-    MAX_EXPOSURE: 0.8,              // 最大持仓比例（总仓位限制）
-    TREND_WINDOW: 10,               // 短期均线窗口（趋势判断）
-    BASE_WINDOW: 51,                // 长期均线窗口（基线判断）
-    RSI_WINDOW: 21,                 // RSI计算窗口（超买超卖指标）
-    VOLATILITY_FILTER: 0.5,         // 波动率过滤阈值（筛选稳定标的）
-    STOP_LOSS: 0.05,                // 动态止损比例（亏损5%平仓）
-    TAKE_PROFIT: 0.20,              // 动态止盈比例（盈利20%平仓）
-    ENABLE_SHORT: true,             // 启用做空（允许空头交易）
-    MAX_SHARE_RATIO: 0.5,           // 最大持股比例（单标的最大持股比例）
-    FORECAST_BUY: 0.60,             // 多头预测阈值（新增配置）
-    FORECAST_SELL: 0.40,            // 空头预测阈值（新增配置）
+    RISK_PER_TRADE: 0.03,           // 降低单笔风险比例到3%
+    MAX_EXPOSURE: 0.7,              // 降低最大持仓比例到70%
+    TREND_WINDOW: 15,               // 增加趋势窗口
+    BASE_WINDOW: 60,                // 增加基线窗口
+    RSI_WINDOW: 14,                 // 标准RSI窗口
+    VOLATILITY_FILTER: 0.4,         // 更严格的波动率过滤
+    STOP_LOSS: 0.03,                // 收紧止损到3%
+    TAKE_PROFIT: 0.15,              // 调整止盈到15%
+    ENABLE_SHORT: true,
+    MAX_SHARE_RATIO: 0.4,           // 降低单个股票最大持仓
+    FORECAST_BUY: 0.65,             // 提高做多要求
+    FORECAST_SELL: 0.35,            // 降低做空要求
     COMMISSION_FEE: ns.stock.getConstants().StockMarketCommission  //交易手续费
   };
 
@@ -144,11 +144,12 @@ export async function main(ns) {
     const [longShares, , shortShares] = ns.stock.getPosition(sym);
     const position = calculatePosition(sym, analysis);
 
-    // 多头开仓四因子验证
-    if (analysis.trend === 'bull' || longShares <= 0) {
+    // 增强多头开仓条件
+    if (analysis.trend === 'bull' && longShares <= 0) {
       if (analysis.forecast > CONFIG.FORECAST_BUY &&
-        analysis.rsi < 40 &&
-        analysis.volatility < CONFIG.VOLATILITY_FILTER) {
+        analysis.rsi < 35 &&  // 更严格的超卖条件
+        analysis.volatility < CONFIG.VOLATILITY_FILTER &&
+        analysis.momentum > 0.5) {  // 新增动量指标判断
         const cost = position * analysis.askPrice;
         if (cost > ns.getServerMoneyAvailable('home')) return;
 
@@ -157,27 +158,38 @@ export async function main(ns) {
       }
     }
 
-    // 空头开仓四因子验证
-    if (CONFIG.ENABLE_SHORT && (analysis.trend === 'bear' || shortShares === 0)) {
+    // 增强空头开仓条件
+    if (CONFIG.ENABLE_SHORT && analysis.trend === 'bear' && shortShares === 0) {
       if (analysis.forecast < CONFIG.FORECAST_SELL &&
-        analysis.rsi > 60 &&
-        analysis.volatility < CONFIG.VOLATILITY_FILTER) {
+        analysis.rsi > 65 &&  // 更严格的超买条件
+        analysis.volatility < CONFIG.VOLATILITY_FILTER &&
+        analysis.momentum < -0.5) {  // 新增动量指标判断
         const sold = ns.stock.buyShort(sym, position);
         if (sold > 0) logTransaction('Buy 📉', sym, sold, analysis.bidPrice);
       }
     }
   }
 
-  /** 仓位管理（增加盈亏计算）*/
+  /** 改进的仓位管理 */
   function managePosition(sym, analysis) {
     const [long, longAvg, short, shortAvg] = ns.stock.getPosition(sym);
+    const currentRisk = getRisk();
+
+    // 动态调整止损
+    const dynamicStopLoss = Math.min(
+      CONFIG.STOP_LOSS * (1 + currentRisk),
+      CONFIG.STOP_LOSS * 1.5
+    );
 
     if (long > 0) {
       const currentPrice = analysis.bidPrice;
       const profit = long * (currentPrice - longAvg); // 计算多单盈亏
       const profitRatio = (currentPrice - longAvg) / longAvg;
 
-      if (profitRatio <= -CONFIG.STOP_LOSS || profitRatio >= CONFIG.TAKE_PROFIT) {
+      // 增加趋势反转平仓条件
+      if (profitRatio <= -dynamicStopLoss ||
+        profitRatio >= CONFIG.TAKE_PROFIT ||
+        (profitRatio > 0 && analysis.trend === 'bear')) {
         const sold = ns.stock.sellStock(sym, long);
         if (sold > 0) logTransaction('Sell📈', sym, -long, currentPrice, profit);
       }
