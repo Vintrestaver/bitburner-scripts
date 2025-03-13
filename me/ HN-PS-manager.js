@@ -69,10 +69,13 @@ export async function main(ns) {
             const reserve = Number(ns.read(CONFIG.RESERVE_FILE)) || 0;
             const total = ns.getPlayer().money - reserve;
 
-            // 动态调整分配比例
-            const avgHacknetROI = state.hacknetROI.slice(-3).reduce((a, b) => a + b, 0) / 3 || 1;
-            const avgServerROI = state.serverROI.slice(-3).reduce((a, b) => a + b, 0) / 3 || 1;
+            // 改进平均ROI计算
+            const hacknetROIRecent = state.hacknetROI.slice(-3);
+            const avgHacknetROI = hacknetROIRecent.length ? hacknetROIRecent.reduce((a, b) => a + b, 0) / hacknetROIRecent.length : 1;
+            const serverROIRecent = state.serverROI.slice(-3);
+            const avgServerROI = serverROIRecent.length ? serverROIRecent.reduce((a, b) => a + b, 0) / serverROIRecent.length : 1;
 
+            // 动态调整分配比例
             if (avgHacknetROI > avgServerROI) {
                 CONFIG.ALLOCATION.HACKNET = Math.min(
                     CONFIG.ALLOCATION.HACKNET + CONFIG.ALLOCATION.ADJUST_STEP,
@@ -145,26 +148,43 @@ export async function main(ns) {
                 }
             }, 'Purchase Hacknet Node');
 
-            // 升级现有节点
             const numNodes = ns.hacknet.numNodes();
             for (let i = 0; i < numNodes; i++) {
-                const upgrades = this.upgradeTypes
-                    .map(t => ({
-                        type: t.name,
-                        cost: t.cost(i),
-                        action: t.action,
-                        roi: t.roi(i)
-                    }))
-                    .filter(u => u.cost > 0)
-                    .sort((a, b) => b.roi - a.roi);
+                const stats = ns.hacknet.getNodeStats(i);
+                const upgrades = [
+                    {
+                        type: 'Level',
+                        cost: ns.hacknet.getLevelUpgradeCost(i),
+                        action: () => ns.hacknet.upgradeLevel(i),
+                        roi: (stats.production * 0.1) / ns.hacknet.getLevelUpgradeCost(i)
+                    },
+                    {
+                        type: 'RAM',
+                        cost: ns.hacknet.getRamUpgradeCost(i),
+                        action: () => ns.hacknet.upgradeRam(i),
+                        roi: (stats.production * 0.05) / ns.hacknet.getRamUpgradeCost(i)
+                    },
+                    {
+                        type: 'Core',
+                        cost: ns.hacknet.getCoreUpgradeCost(i),
+                        action: () => ns.hacknet.upgradeCore(i),
+                        roi: (stats.production * 0.15) / ns.hacknet.getCoreUpgradeCost(i)
+                    },
+                    {
+                        type: 'Cache',
+                        cost: ns.hacknet.getCacheUpgradeCost(i),
+                        action: () => ns.hacknet.upgradeCache(i),
+                        roi: (stats.hashCapacity - stats.ramUsed) / ns.hacknet.getCacheUpgradeCost(i)
+                    }
+                ].filter(u => u.cost > 0).sort((a, b) => b.roi - a.roi);
 
                 for (const { type, cost, action } of upgrades) {
                     if (cost < budget.hacknet) {
                         const success = await safeExecute(
                             async () => {
-                                action(i);
+                                action();
                                 budget.hacknet -= cost;
-                                state.hacknetROI.push((ns.hacknet.getNodeStats(i).production * 0.1) / cost);
+                                state.hacknetROI.push((stats.production * 0.1) / cost);
                                 return true;
                             },
                             `Upgrade ${type} on node ${i}`
@@ -202,16 +222,16 @@ export async function main(ns) {
         async manage(budget) {
             const servers = ns.getPurchasedServers();
             const targetRam = this.calculateOptimalRAM(servers);
+            const serverCost = ns.getPurchasedServerCost(targetRam);
 
             // 购买新服务器
             if (servers.length < CONFIG.MAX_SERVERS) {
                 await safeExecute(async () => {
-                    const cost = ns.getPurchasedServerCost(targetRam);
-                    if (cost < budget.servers) {
+                    if (serverCost < budget.servers) {
                         const hostname = ns.purchaseServer(CONFIG.SERVER_PREFIX, targetRam);
                         if (hostname) {
-                            budget.servers -= cost;
-                            state.serverROI.push((targetRam * 0.1) / cost);
+                            budget.servers -= serverCost;
+                            state.serverROI.push((targetRam * 0.1) / serverCost);
                         }
                     }
                 }, 'Purchase New Server');
@@ -222,15 +242,13 @@ export async function main(ns) {
                 await safeExecute(async () => {
                     const currentRam = ns.getServerMaxRam(hostname);
                     if (currentRam >= targetRam) return;
-
-                    const cost = ns.getPurchasedServerCost(targetRam);
-                    if (cost < budget.servers) {
+                    if (serverCost < budget.servers) {
                         ns.killall(hostname);
                         ns.deleteServer(hostname);
                         const newHost = ns.purchaseServer(CONFIG.SERVER_PREFIX, targetRam);
                         if (newHost) {
-                            budget.servers -= cost;
-                            state.serverROI.push(((targetRam - currentRam) * 0.1) / cost);
+                            budget.servers -= serverCost;
+                            state.serverROI.push(((targetRam - currentRam) * 0.1) / serverCost);
                         }
                     }
                 }, `Upgrade Server ${hostname}`);
@@ -247,21 +265,15 @@ export async function main(ns) {
         try {
             ns.clearLog();
             const budget = await budgetManager.refresh();
-
-            ns.print(` 可用资金: ${fmt.money(budget.remaining)}`);
-            ns.print(` 分配比例: \n     Hacknet ${fmt.percent(CONFIG.ALLOCATION.HACKNET)} \n     Servers ${fmt.percent(CONFIG.ALLOCATION.SERVERS)}`);
-
+            ns.print(`可用资金: ${fmt.money(budget.remaining)}\n分配比例: Hacknet ${fmt.percent(CONFIG.ALLOCATION.HACKNET)}, Servers ${fmt.percent(CONFIG.ALLOCATION.SERVERS)}`);
             await hacknetManager.manage(budget);
             await serverManager.manage(budget);
-
-            ns.print(` 错误计数: ${state.errorCount}`);
-
+            ns.print(`错误计数: ${state.errorCount}`);
             const sleepTime = state.errorCount > CONFIG.MAX_ERROR_COUNT ? 5000 : 1000;
             await ns.sleep(sleepTime);
-
         } catch (error) {
             ns.print(`[CRITICAL] 主循环错误: ${error}`);
-            await ns.sleep(5000);         
+            await ns.sleep(5000);
         }
     }
 }
