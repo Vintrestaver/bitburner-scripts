@@ -6,26 +6,28 @@ export async function main(ns) {
     ns.ui.openTail();
     // 设置尾部窗口的标题
     ns.ui.setTailTitle(`服务器管理 [${ns.getScriptName()}]`)
-    // 调整尾部窗口的大小
-    ns.ui.resizeTail(200, 150);
     // 获取当前窗口的尺寸
     const [W, H] = ns.ui.windowSize();
-    // 移动尾部窗口到指定位置
-    ns.ui.moveTail(W - 200, H - 160)
 
-    // 配置常量
+
+    // 系统配置参数
     const CONFIG = {
-        RESERVE_FILE: "reserve.txt", // 保留资金的文件名
-        HASH_CAPACITY_THRESHOLD: 0.98, // Hash容量阈值
-        SERVER_PREFIX: 'daemon', // 服务器名称前缀
-        MAX_SERVERS: 25, // 最大服务器数量
-        BASE_RAM: 8, // 基础RAM大小
-        USAGE_THRESHOLD: 0.8, // 使用率阈值
+        // 资金管理配置
+        RESERVE_FILE: "reserve.txt", // 储备金存储文件（自动从可用资金中扣除）
+        HASH_CAPACITY_THRESHOLD: 0.98, // Hacknet节点哈希容量使用率阈值（达到该值触发缓存升级）
+
+        // 服务器配置
+        SERVER_PREFIX: 'daemon', // 采购服务器的命名前缀
+        MAX_SERVERS: 25, // 最大可购买服务器数量（游戏限制）
+        BASE_RAM: 8, // 新服务器的基准内存大小（GB）
+        USAGE_THRESHOLD: 0.8, // 服务器内存使用率阈值（超过该值触发扩容）
+
+        // 资金分配策略
         ALLOCATION: {
-            HACKNET: 0.4, // Hacknet分配比例
-            SERVERS: 0.6, // 服务器分配比例
-            ADJUST_STEP: 0.05, // 调整步长
-            MIN_ALLOCATION: 0.1 // 最小分配比例
+            HACKNET: 0.4, // Hacknet节点初始投资比例
+            SERVERS: 0.6, // 服务器采购初始投资比例
+            ADJUST_STEP: 0.05, // 动态调整步长（每次ROI比较后的调整幅度）
+            MIN_ALLOCATION: 0.1 // 最低保证分配比例（防止完全停止某类投资）
         },
         RETRY_DELAY: 1000, // 重试延迟时间
         MAX_ERROR_COUNT: 5 // 最大错误计数
@@ -63,19 +65,22 @@ export async function main(ns) {
         }
     };
 
-    // 资金分配管理器
+    /**
+     * 资金分配管理器 - 动态调整Hacknet节点和服务器采购之间的资金分配
+     * 基于最近3次投资回报率(ROI)动态调整分配比例，优先投资回报率高的方向
+     */
     class BudgetManager {
+        // 刷新资金分配策略
         async refresh() {
-            const reserve = Number(ns.read(CONFIG.RESERVE_FILE)) || 0;
-            const total = ns.getPlayer().money - reserve;
+            const reserve = Number(ns.read(CONFIG.RESERVE_FILE)) || 0; // 读取储备金
+            const total = ns.getPlayer().money - reserve; // 计算可用资金
 
-            // 改进平均ROI计算
-            const hacknetROIRecent = state.hacknetROI.slice(-3);
-            const avgHacknetROI = hacknetROIRecent.length ? hacknetROIRecent.reduce((a, b) => a + b, 0) / hacknetROIRecent.length : 1;
-            const serverROIRecent = state.serverROI.slice(-3);
-            const avgServerROI = serverROIRecent.length ? serverROIRecent.reduce((a, b) => a + b, 0) / serverROIRecent.length : 1;
+            // 计算最近3次的平均投资回报率（使用滑动窗口平均算法）
+            const avgHacknetROI = state.hacknetROI.slice(-3).reduce((a, b) => a + b, 0) / 3 || 1;
+            const avgServerROI = state.serverROI.slice(-3).reduce((a, b) => a + b, 0) / 3 || 1;
 
-            // 动态调整分配比例
+            // 动态调整算法：比较两类投资的ROI，自动调整分配比例
+
             if (avgHacknetROI > avgServerROI) {
                 CONFIG.ALLOCATION.HACKNET = Math.min(
                     CONFIG.ALLOCATION.HACKNET + CONFIG.ALLOCATION.ADJUST_STEP,
@@ -104,15 +109,20 @@ export async function main(ns) {
         }
     }
 
-    // Hacknet节点管理器
+    /**
+     * Hacknet节点管理器 - 自动化Hacknet节点的采购和升级
+     * 支持四种升级类型，按投资回报率(ROI)自动选择最优升级
+     * 升级优先级：缓存 > 核心 > 等级 > RAM
+     */
     class HacknetManager {
         constructor() {
+            // 定义可升级类型及其成本/收益计算方式
             this.upgradeTypes = [
                 {
-                    name: 'Level',
+                    name: 'Level',      // 节点等级
                     cost: i => ns.hacknet.getLevelUpgradeCost(i),
                     action: i => ns.hacknet.upgradeLevel(i),
-                    roi: i => (ns.hacknet.getNodeStats(i).production * 0.1) / ns.hacknet.getLevelUpgradeCost(i)
+                    roi: i => (ns.hacknet.getNodeStats(i).production * 0.1) / ns.hacknet.getLevelUpgradeCost(i) // 每$产生的$/sec
                 },
                 {
                     name: 'RAM',
@@ -145,46 +155,30 @@ export async function main(ns) {
                 if (cost < budget.hacknet) {
                     ns.hacknet.purchaseNode();
                     budget.hacknet -= cost;
+                    ns.print(`[HACKNET] 新节点购入 花费：${fmt.money(cost)} 剩余预算：${fmt.money(budget.hacknet)}`);
                 }
             }, 'Purchase Hacknet Node');
 
+            // 升级现有节点
             const numNodes = ns.hacknet.numNodes();
             for (let i = 0; i < numNodes; i++) {
-                const stats = ns.hacknet.getNodeStats(i);
-                const upgrades = [
-                    {
-                        type: 'Level',
-                        cost: ns.hacknet.getLevelUpgradeCost(i),
-                        action: () => ns.hacknet.upgradeLevel(i),
-                        roi: (stats.production * 0.1) / ns.hacknet.getLevelUpgradeCost(i)
-                    },
-                    {
-                        type: 'RAM',
-                        cost: ns.hacknet.getRamUpgradeCost(i),
-                        action: () => ns.hacknet.upgradeRam(i),
-                        roi: (stats.production * 0.05) / ns.hacknet.getRamUpgradeCost(i)
-                    },
-                    {
-                        type: 'Core',
-                        cost: ns.hacknet.getCoreUpgradeCost(i),
-                        action: () => ns.hacknet.upgradeCore(i),
-                        roi: (stats.production * 0.15) / ns.hacknet.getCoreUpgradeCost(i)
-                    },
-                    {
-                        type: 'Cache',
-                        cost: ns.hacknet.getCacheUpgradeCost(i),
-                        action: () => ns.hacknet.upgradeCache(i),
-                        roi: (stats.hashCapacity - stats.ramUsed) / ns.hacknet.getCacheUpgradeCost(i)
-                    }
-                ].filter(u => u.cost > 0).sort((a, b) => b.roi - a.roi);
+                const upgrades = this.upgradeTypes
+                    .map(t => ({
+                        type: t.name,
+                        cost: t.cost(i),
+                        action: t.action,
+                        roi: t.roi(i)
+                    }))
+                    .filter(u => u.cost > 0)
+                    .sort((a, b) => b.roi - a.roi);
 
                 for (const { type, cost, action } of upgrades) {
-                    if (cost < budget.hacknet) {
+                    if (cost < budget.hacknet * 0.2) {
                         const success = await safeExecute(
                             async () => {
-                                action();
+                                action(i);
                                 budget.hacknet -= cost;
-                                state.hacknetROI.push((stats.production * 0.1) / cost);
+                                state.hacknetROI.push((ns.hacknet.getNodeStats(i).production * 0.1) / cost);
                                 return true;
                             },
                             `Upgrade ${type} on node ${i}`
@@ -196,24 +190,31 @@ export async function main(ns) {
         }
     }
 
-    // 服务器管理器
+    /**
+     * 服务器管理器 - 自动化服务器的采购和扩容
+     * 实现自动扩容算法：根据当前服务器平均内存使用率动态调整目标RAM大小
+     * 扩容策略：当平均使用率>80%时，RAM大小翻倍，直到达到资金承受能力上限
+     */
     class ServerManager {
+        // 计算最优RAM大小（使用指数退避算法）
         calculateOptimalRAM(servers) {
+            // 计算所有服务器的平均内存使用率
             const usageRatios = servers.map(hostname => {
                 const used = ns.getServerUsedRam(hostname);
                 const max = ns.getServerMaxRam(hostname);
                 return max === 0 ? 0 : used / max;
             });
-
             const avgUsage = usageRatios.reduce((a, b) => a + b, 0) / servers.length;
-            let targetRam = CONFIG.BASE_RAM;
 
+            let targetRam = CONFIG.BASE_RAM; // 从基础RAM开始
+
+            // 自动扩容逻辑：当平均使用率超过阈值且资金允许时，RAM翻倍
             while (
-                targetRam <= 2 ** 20 &&
-                avgUsage > CONFIG.USAGE_THRESHOLD &&
-                ns.getPurchasedServerCost(targetRam * 2) < (ns.getPlayer().money * 0.5)
+                targetRam <= 2 ** 20 && // 不超过1PB (2^20 = 1048576GB)
+                avgUsage > CONFIG.USAGE_THRESHOLD && // 当前使用率超过阈值
+                ns.getPurchasedServerCost(targetRam * 2) < (ns.getPlayer().money * 0.5) // 新RAM成本不超过可用资金的50%
             ) {
-                targetRam *= 2;
+                targetRam *= 2; // 指数级扩容
             }
 
             return targetRam;
@@ -222,16 +223,16 @@ export async function main(ns) {
         async manage(budget) {
             const servers = ns.getPurchasedServers();
             const targetRam = this.calculateOptimalRAM(servers);
-            const serverCost = ns.getPurchasedServerCost(targetRam);
 
             // 购买新服务器
             if (servers.length < CONFIG.MAX_SERVERS) {
                 await safeExecute(async () => {
-                    if (serverCost < budget.servers) {
+                    const cost = ns.getPurchasedServerCost(targetRam);
+                    if (cost < budget.servers) {
                         const hostname = ns.purchaseServer(CONFIG.SERVER_PREFIX, targetRam);
                         if (hostname) {
-                            budget.servers -= serverCost;
-                            state.serverROI.push((targetRam * 0.1) / serverCost);
+                            budget.servers -= cost;
+                            state.serverROI.push((targetRam * 0.1) / cost);
                         }
                     }
                 }, 'Purchase New Server');
@@ -242,13 +243,15 @@ export async function main(ns) {
                 await safeExecute(async () => {
                     const currentRam = ns.getServerMaxRam(hostname);
                     if (currentRam >= targetRam) return;
-                    if (serverCost < budget.servers) {
+
+                    const cost = ns.getPurchasedServerCost(targetRam);
+                    if (cost < budget.servers) {
                         ns.killall(hostname);
                         ns.deleteServer(hostname);
                         const newHost = ns.purchaseServer(CONFIG.SERVER_PREFIX, targetRam);
                         if (newHost) {
-                            budget.servers -= serverCost;
-                            state.serverROI.push(((targetRam - currentRam) * 0.1) / serverCost);
+                            budget.servers -= cost;
+                            state.serverROI.push(((targetRam - currentRam) * 0.1) / cost);
                         }
                     }
                 }, `Upgrade Server ${hostname}`);
@@ -256,21 +259,32 @@ export async function main(ns) {
         }
     }
 
-    // 主循环
+    // 主控制循环（每1-5秒执行一次）
     const budgetManager = new BudgetManager();
     const hacknetManager = new HacknetManager();
     const serverManager = new ServerManager();
 
     while (true) {
+        // 界面布局调整
+        ns.ui.resizeTail(250, 200); // 固定尾部窗口尺寸为200x150
+        ns.ui.moveTail(W - 250, H - 200) // 定位到窗口右下角
         try {
             ns.clearLog();
             const budget = await budgetManager.refresh();
-            ns.print(`可用资金: ${fmt.money(budget.remaining)}\n分配比例: Hacknet ${fmt.percent(CONFIG.ALLOCATION.HACKNET)}, Servers ${fmt.percent(CONFIG.ALLOCATION.SERVERS)}`);
+
+            ns.print(` 可用资金: ${fmt.money(budget.remaining)}`);
+            ns.print(` 分配比例: \n     Hacknet ${fmt.percent(CONFIG.ALLOCATION.HACKNET)} \n     Servers ${fmt.percent(CONFIG.ALLOCATION.SERVERS)}`);
+            ns.print(` 动态调整: ${fmt.percent(CONFIG.ALLOCATION.ADJUST_STEP)} 步长`);
+
             await hacknetManager.manage(budget);
             await serverManager.manage(budget);
-            ns.print(`错误计数: ${state.errorCount}`);
+            ns.print(` 最后操作: ${new Date().toLocaleTimeString()}`);
+
+            ns.print(` 错误计数: ${state.errorCount}`);
+
             const sleepTime = state.errorCount > CONFIG.MAX_ERROR_COUNT ? 5000 : 1000;
             await ns.sleep(sleepTime);
+
         } catch (error) {
             ns.print(`[CRITICAL] 主循环错误: ${error}`);
             await ns.sleep(5000);
