@@ -100,7 +100,8 @@ export async function main(ns) {
 
     ns.disableLog("ALL");           // 禁用所有日志
     ns.ui.setTailTitle(`StockManager v7.0 [${ns.getScriptName()}]`); // 设置tail标题
-    ns.ui.openTail();               // 打开tail窗口
+    ns.ui.openTail();
+    ns.atExit(() => ns.ui.closeTail());            // 打开tail窗口
     const [W, H] = ns.ui.windowSize();// 获取tail窗口大小
 
     await initializeState();        // 初始化状态
@@ -289,7 +290,7 @@ export async function main(ns) {
             );
             if (shortCondition) {
                 const sold = ns.stock.buyShort(sym, position); // 卖空股票
-                if (sold > 0) logTransaction('Buy 📉', sym, sold, analysis.bidPrice); // 记录交易
+                if (sold > 0) logTransaction('Sell 📉', sym, sold, analysis.bidPrice); // 记录交易
             }
         }
     }
@@ -323,11 +324,11 @@ export async function main(ns) {
 
         const volColor = getRisk() > 0.2 ? COLORS.warning : COLORS.info; // 根据风险设置颜色
         ns.print([
-            `${COLORS.info}NET: ${fmtMoney(getNetWorth())}${COLORS.reset}`, // 净资产
-            `${COLORS.profit}PRO: ${fmtMoney(STATE.metrics.totalProfit)}${COLORS.reset}`, // 总利润
-            `${COLORS.warning}DRA: ${fmtPct(STATE.metrics.maxDrawdown)}${COLORS.reset}`, // 最大回撤
-            `${COLORS.highlight}LEV: ${getLeverage().toFixed(1)}x${COLORS.reset}`, // 杠杆倍数
-            `${volColor}RISK: ${getRisk().toFixed(2)}${COLORS.reset}` // 风险水平
+            `${COLORS.info}NET: ${fmtMoney(getNetWorth())}`, // 净资产
+            `${COLORS.profit}PRO: ${fmtMoney(STATE.metrics.totalProfit)}`, // 总利润
+            `${COLORS.warning}DRA: ${fmtPct(STATE.metrics.maxDrawdown)}`, // 最大回撤
+            `${COLORS.highlight}LEV: ${getLeverage().toFixed(1)}x`, // 杠杆倍数
+            `${volColor}RISK: ${getRisk().toFixed(2)}` // 风险水平
         ].join(' | ')); // 打印关键指标
         ns.print("═".repeat(80)); // 打印分隔线
 
@@ -340,13 +341,13 @@ export async function main(ns) {
 
         ns.print(`${COLORS.header}──📜 Latest Transactions ${'─'.repeat(80 - 25)}${COLORS.reset}`); // 打印交易记录标题
         STATE.transactions.slice(-5).forEach(t => {
-            const profitColor = t.profit >= 0 ? COLORS.profit : COLORS.loss; // 根据收益设置颜色
+            const profitColor = t.profit > 0 ? COLORS.profit : COLORS.loss; // 根据收益设置颜色
             ns.print(
                 ` ${COLORS.info}${t.time} ${t.icon.padEnd(5)} ` +
                 `${getTrendColor(t.sym)}${t.sym.padEnd(5)} ` +
                 `${COLORS.highlight}${fmtNum(Math.abs(t.shares))}@${fmtNum(t.price)} ` +
-                `${profitColor}${t.profit >= 0 ? '▲' : '▼'} ` +
-                `${t.profit != 0 ? fmtMoney(t.profit) : ''}${COLORS.reset}`
+                `${profitColor}${t.profit > 0 ? '▲' : t.profit < 0 ? '▼' : '——'}` +
+                `${t.profit != 0 ? fmtMoney(t.profit) : ''}`
             ); // 打印交易记录
         });
     }
