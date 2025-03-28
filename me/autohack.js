@@ -1,37 +1,28 @@
 /** @param {NS} ns**/
 /** @param {NS} ns**/
 export async function main(ns) {
+    ns.atExit(() => ns.ui.closeTail());
     ns.disableLog('ALL');
     ns.ui.setTailTitle(`AutoHack v2.6 [${ns.getScriptName()}]`); // 更新版本号
     ns.ui.openTail();
     const [W, H] = ns.ui.windowSize()
 
 
-    // 增加颜色配置
-    const COLORS = {
-        reset: '\x1b[0m',
-        bullish: '\x1b[38;5;46m',      // 亮绿色
-        bearish: '\x1b[38;5;196m',     // 亮红色
-        profit: '\x1b[38;5;47m',       // 渐变绿色
-        loss: '\x1b[38;5;160m',        // 渐变红色  
-        warning: '\x1b[38;5;226m',     // 黄色
-        info: '\x1b[38;5;51m',         // 青色
-        highlight: '\x1b[38;5;213m',   // 粉紫色
-        header: '\x1b[48;5;236m',      // 深灰色背景
-        rsiLow: '\x1b[38;5;46m',       // RSI <30
-        rsiMid: '\x1b[38;5;226m',      // RSI 30-70
-        rsiHigh: '\x1b[38;5;196m'      // RSI >70
-    };
     const FILES = ['grow.script', 'weak.script', 'hack.script'];
     let EXCLUDE = [];
     const CYCLE = [0, "▁", '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     const HACK_COMMANDS = ['brutessh', 'ftpcrack', 'relaysmtp', 'httpworm', 'sqlinject'];
 
-    await Promise.all([
-        ns.write(FILES[0], 'grow(args[0])', 'w'),
-        ns.write(FILES[1], 'weaken(args[0])', 'w'),
-        ns.write(FILES[2], 'hack(args[0])', 'w')
-    ]);
+    try {
+        await Promise.all([
+            ns.write(FILES[0], 'grow(args[0])', 'w'),
+            ns.write(FILES[1], 'weaken(args[0])', 'w'),
+            ns.write(FILES[2], 'hack(args[0])', 'w')
+        ]);
+    } catch (e) {
+        handleError(`文件写入失败: ${e}`);
+        return; // 关键文件创建失败，终止脚本
+    }
     let servers, hosts, targets, exes, tarIndex, loop, hType, act;
     const sortDesc = arr => arr.sort((a, b) => b[0] - a[0]);
     const truncate = s => s.length > 14 ? s.substring(0, 14) + '...' : s;
@@ -69,13 +60,10 @@ export async function main(ns) {
             const filled = Math.floor(ratio * 10);
             const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
 
-            const funds = `${COLORS.info}$${ns.formatNumber(currentMoney, 1).padEnd(6)}${COLORS.reset}` || '_'.repeat(6);
-            // const security = serverInfo.SL(t[1]).toFixed(1).padStart(5);
-            // const minSecurity = serverInfo.MSL(t[1]).toFixed(1).padEnd(5);
+            const funds = `$${ns.formatNumber(currentMoney, 1).padEnd(6)}` || '_'.repeat(6);
             const sec = 1 - serverInfo.MSL(t[1]) / serverInfo.SL(t[1]) || 0;
             const filled1 = Math.floor(sec * 8);
-            const col = sec > 0.66 ? COLORS.rsiHigh : sec > 0.33 ? COLORS.rsiMid : ''
-            const progressBar1 = `${col}` + '■'.repeat(filled1) + '□'.repeat(8 - filled1) + `${COLORS.reset}`;
+            const progressBar1 = '■'.repeat(filled1) + '□'.repeat(8 - filled1);
 
             ns.print(`║ ${(act[t[1]] || ' ')} ║ ${truncate(t[1]).padEnd(17)} ║ ${progressBar1} ║ ${progressBar} ${funds} ║`);
         });
@@ -97,35 +85,71 @@ export async function main(ns) {
         ns.print('╚═══════════════════════════════════════════════════════╝');
     }
 
+    /**
+     * 扫描网络并处理服务器
+     * @param {string} host 父服务器名
+     * @param {string} current 当前服务器名
+     * 递归扫描所有可访问服务器，执行破解和入侵操作
+     */
     async function scanNetwork(host, current) {
-        for (const server of ns.scan(current)) {
-            if (host === server || EXCLUDE.includes(server)) continue;
+        try {
+            for (const server of ns.scan(current)) {
+                if (host === server || EXCLUDE.includes(server)) continue;
 
-            const isPurchased = ns.getPurchasedServers().includes(server);
-            if (!isPurchased && serverInfo.NPR(server) <= exes.length) {
-                HACK_COMMANDS.filter(cmd => exes.includes(cmd)).forEach(cmd => ns[cmd](server));
-                ns.nuke(server);
+                try {
+                    const isPurchased = ns.getPurchasedServers().includes(server);
+                    if (!isPurchased && serverInfo.NPR(server) <= exes.length) {
+                        HACK_COMMANDS.filter(cmd => exes.includes(cmd)).forEach(cmd => {
+                            try {
+                                ns[cmd](server);
+                            } catch (e) {
+                                handleError(`${cmd}执行失败: ${e}`);
+                            }
+                        });
+                        try {
+                            ns.nuke(server);
+                        } catch (e) {
+                            handleError(`nuke执行失败: ${e}`);
+                        }
+                    }
+
+                    if (serverInfo.MM(server) > 0 &&
+                        serverInfo.RHL(server) <= ns.getHackingLevel() &&
+                        serverInfo.MSL(server) < 100) {
+                        targets.push([Math.floor(serverInfo.MM(server) / serverInfo.MSL(server)), server]);
+                    }
+
+                    if (serverInfo.MR(server) > 4 && !EXCLUDE.includes(server)) {
+                        hosts.push([serverInfo.MR(server), server]);
+                    }
+
+                    servers.push(server);
+                    try {
+                        ns.scp(FILES, server, 'home');
+                    } catch (e) {
+                        handleError(`文件复制失败: ${e}`);
+                    }
+                    await scanNetwork(current, server);
+                } catch (e) {
+                    handleError(`服务器${server}处理失败: ${e}`);
+                }
             }
-
-            if (serverInfo.MM(server) > 0 &&
-                serverInfo.RHL(server) <= ns.getHackingLevel() &&
-                serverInfo.MSL(server) < 100) {
-                targets.push([Math.floor(serverInfo.MM(server) / serverInfo.MSL(server)), server]);
-            }
-
-            if (serverInfo.MR(server) > 4 && !EXCLUDE.includes(server)) {
-                hosts.push([serverInfo.MR(server), server]);
-            }
-
-            servers.push(server);
-            ns.scp(FILES, server, 'home');
-            await scanNetwork(current, server);
+            targets = sortDesc(targets);
+            hosts = sortDesc(hosts);
+        } catch (e) {
+            handleError(`网络扫描失败: ${e}`);
+            throw e; // 重新抛出异常让上层处理
         }
-        targets = sortDesc(targets);
-        hosts = sortDesc(hosts);
     }
 
 
+    /**
+     * 计算hack脚本的最佳线程数
+     * @param {string} target 目标服务器
+     * @param {number} freeRam 可用RAM
+     * @param {number} _cores CPU核心数(未使用)
+     * @returns {number} 推荐线程数
+     */
     function calculateHackThreads(target, freeRam, _cores) {
         const scriptRam = ns.getScriptRam(FILES[2]);
         const maxThreads = Math.floor(freeRam / scriptRam);
@@ -137,6 +161,13 @@ export async function main(ns) {
         return Math.min(maxThreads, maxSafeThreads);
     }
 
+    /**
+     * 计算weaken脚本的最佳线程数
+     * @param {string} target 目标服务器
+     * @param {number} freeRam 可用RAM
+     * @param {number} cores CPU核心数
+     * @returns {number} 推荐线程数
+     */
     function calculateWeakenThreads(target, freeRam, cores) {
         const scriptRam = ns.getScriptRam(FILES[1]);
         const securityDiff = serverInfo.SL(target) - serverInfo.MSL(target);
@@ -145,6 +176,13 @@ export async function main(ns) {
         return Math.min(threadsNeeded, possibleThreads);
     }
 
+    /**
+     * 计算grow和weaken脚本的最佳线程数组合
+     * @param {string} target 目标服务器
+     * @param {number} freeRam 可用RAM
+     * @param {number} cores CPU核心数
+     * @returns {number[]} [grow线程数, weaken线程数]
+     */
     function calculateGWThreads(target, freeRam, cores) {
         const growRam = ns.getScriptRam(FILES[0]);
         const weakenRam = ns.getScriptRam(FILES[1]);
@@ -170,16 +208,37 @@ export async function main(ns) {
         return [growThreads, weakenThreads];
     }
 
-    // 新增函数：检查是否有足够的资源运行脚本
+    /**
+     * 检查服务器是否有足够RAM运行脚本
+     * @param {string} host 服务器名
+     * @param {string} script 脚本名
+     * @param {number} threads 线程数
+     * @returns {boolean} 是否有足够资源
+     */
     function hasEnoughResources(host, script, threads) {
         const scriptRam = ns.getScriptRam(script);
         const freeRam = serverInfo.MR(host) - serverInfo.UR(host);
         return freeRam >= scriptRam * threads;
     }
 
-    function handleError(error) { ns.print(`\x1b[38;5;196m⚠️ 错误: ${error}\x1b[0m`); }
+    /**
+     * 处理并显示错误信息
+     * @param {string} error 错误信息
+     * 在日志中打印错误并显示toast通知
+     */
+    function handleError(error) {
+        ns.print(`⚠️ 严重错误: ${error}`);
+        ns.toast(`⚠️ 自动黑客脚本错误: ${error}`, 'error', 2000);
+    }
 
-    // 修改 allocateResources 函数，增加资源检查
+    /**
+     * 改进的资源分配函数
+     * 根据目标服务器状态自动分配hack/grow/weaken脚本
+     * 1. 检查目标服务器资金状态
+     * 2. 检查目标服务器安全等级
+     * 3. 根据可用RAM计算最优线程数
+     * 4. 执行相应操作
+     */
     async function allocateResourcesImproved() {
         for (const [_, host] of hosts) {
             if (host === 'home') continue;
@@ -224,7 +283,7 @@ export async function main(ns) {
                 }
             }
 
-            if (!loop) act[target] = [`G`, `${COLORS.highlight}W${COLORS.reset}`, `${COLORS.info}H${COLORS.reset}`][hType];
+            if (!loop) act[target] = ['G', 'W', 'H'][hType];
             tarIndex++;
         }
     }
@@ -246,13 +305,14 @@ export async function main(ns) {
         try {
             await updateExes();
             await scanNetwork('', 'home');
-            await allocateResourcesImproved(); // 使用改进后的资源分配函数
+            await allocateResourcesImproved();
             generateLog();
         } catch (e) {
-            handleError(e);
+            handleError(`主循环错误: ${e}`);
+            // 添加错误恢复等待
+            await ns.sleep(5000);
         }
         ns.ui.resizeTail(570, Math.min((targets.length * 24) + 180, 20 * 24 + 180));
         await ns.sleep(1000);
     }
 }
-
