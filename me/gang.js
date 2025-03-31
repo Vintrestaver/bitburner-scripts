@@ -1,5 +1,5 @@
 /**
- * Bitburner 帮派管理系统 v5.1
+ * Bitburner 帮派管理系统 v5.2
  * 优化版本 - 提升性能并增强功能
  * @param {NS} ns
  **/
@@ -26,7 +26,9 @@ export async function main(ns) {
       WANTED_PENALTY: 0.99,
       WARFARE_RATIO: 2,
       MEMBERS: { MIN: 6, MAX: 12 },
-      CACHE_DURATION: 1000 // 缓存持续时间(ms)
+      CACHE_DURATION: 1000, // 缓存持续时间(ms)
+      ERROR_RETRY_DELAY: 5000, // 错误重试延迟(ms)
+      MAX_RETRIES: 3 // 最大重试次数
     },
     UI: {
       SLEEP_TIME: 1000,
@@ -37,10 +39,11 @@ export async function main(ns) {
     }
   };
 
-  // ===================== 缓存系统 =====================
+  // ===================== 增强版缓存系统 =====================
   class Cache {
     static data = new Map();
     static timestamps = new Map();
+    static dependencies = new Map();
 
     static get(key) {
       const timestamp = this.timestamps.get(key);
@@ -50,14 +53,94 @@ export async function main(ns) {
       return null;
     }
 
-    static set(key, value) {
+    static set(key, value, deps = []) {
       this.data.set(key, value);
       this.timestamps.set(key, Date.now());
+      this.dependencies.set(key, deps);
+    }
+
+    static invalidate(key) {
+      this.data.delete(key);
+      this.timestamps.delete(key);
+      this.dependencies.delete(key);
     }
 
     static clear() {
       this.data.clear();
       this.timestamps.clear();
+      this.dependencies.clear();
+    }
+
+    static async getWithRetry(key, fetchFn, retries = CONFIG.THRESHOLDS.MAX_RETRIES) {
+      let value = this.get(key);
+      if (value !== null) return value;
+
+      for (let i = 0; i < retries; i++) {
+        try {
+          value = fetchFn();
+          // 对成员列表进行特殊处理
+          if (key === 'members' && value) {
+            // 确保返回的是数组
+            value = Array.isArray(value) ? value : Object.values(value);
+            if (!Array.isArray(value)) {
+              throw new Error(`成员列表格式错误: ${typeof value}`);
+            }
+          }
+          this.set(key, value);
+          return value;
+        } catch (e) {
+          if (i === retries - 1) throw e;
+          await new Promise(resolve => setTimeout(resolve, CONFIG.THRESHOLDS.ERROR_RETRY_DELAY));
+        }
+      }
+      return null;
+    }
+  }
+
+  // ===================== 性能监控系统 =====================
+  class PerformanceMonitor {
+    static metrics = {
+      apiCalls: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      errors: 0,
+      lastReset: Date.now()
+    };
+
+    static trackApiCall() {
+      this.metrics.apiCalls++;
+    }
+
+    static trackCacheHit() {
+      this.metrics.cacheHits++;
+    }
+
+    static trackCacheMiss() {
+      this.metrics.cacheMisses++;
+    }
+
+    static trackError() {
+      this.metrics.errors++;
+    }
+
+    static getStats() {
+      const now = Date.now();
+      const duration = (now - this.metrics.lastReset) / 1000;
+      return {
+        apiCallsPerSecond: this.metrics.apiCalls / duration,
+        cacheHitRate: this.metrics.cacheHits / (this.metrics.cacheHits + this.metrics.cacheMisses),
+        errorRate: this.metrics.errors / duration
+      };
+    }
+
+    static reset() {
+      this.metrics = {
+        apiCalls: 0,
+        cacheHits: 0,
+        cacheMisses: 0,
+        errors: 0,
+        lastReset: Date.now()
+      };
     }
   }
 
@@ -149,17 +232,45 @@ export async function main(ns) {
     /** 动态任务分配 */
     static assignTasks(ns, STATE, forceReset = false) {
       try {
-        const gangInfo = ns.gang.getGangInformation();
-        const members = ns.gang.getMemberNames();
-        const enemyPower = Math.max(...Object.values(ns.gang.getOtherGangInformation()).map(g => g.power));
-        const shouldWarfare = gangInfo.power >= enemyPower * CONFIG.THRESHOLDS.WARFARE_RATIO;
+        const gangInfo = Cache.getWithRetry('gangInfo', () => {
+          PerformanceMonitor.trackApiCall();
+          return ns.gang.getGangInformation();
+        });
 
+        let members = Cache.getWithRetry('members', () => {
+          PerformanceMonitor.trackApiCall();
+          const result = ns.gang.getMemberNames();
+          // 确保返回的是数组
+          return Array.isArray(result) ? result : Object.values(result);
+        });
+
+        // 确保 members 是数组
+        if (!members) {
+          throw new Error('获取成员列表失败：返回值为空');
+        }
+
+        if (!Array.isArray(members)) {
+          members = Object.values(members);
+          if (!Array.isArray(members)) {
+            throw new Error(`获取成员列表失败：无法转换为数组 (${typeof members})`);
+          }
+        }
+
+        const enemyPower = Cache.getWithRetry('enemyPower', () => {
+          PerformanceMonitor.trackApiCall();
+          return Math.max(...Object.values(ns.gang.getOtherGangInformation()).map(g => g.power));
+        });
+
+        const shouldWarfare = gangInfo.power >= enemyPower * CONFIG.THRESHOLDS.WARFARE_RATIO;
         ns.gang.setTerritoryWarfare(shouldWarfare);
 
         // 批量更新任务
         const taskUpdates = members.map(member => {
           if (forceReset) STATE.autoTasks.set(member, null);
-          const currentTask = ns.gang.getMemberInformation(member).task;
+          const currentTask = Cache.getWithRetry(`task_${member}`, () => {
+            PerformanceMonitor.trackApiCall();
+            return ns.gang.getMemberInformation(member).task;
+          });
 
           if (STATE.autoTasks.get(member) === CONFIG.TASKS.MANUAL &&
             currentTask !== CONFIG.TASKS.NULL) return null;
@@ -172,10 +283,12 @@ export async function main(ns) {
         taskUpdates.forEach(({ member, newTask }) => {
           ns.gang.setMemberTask(member, newTask);
           STATE.autoTasks.set(member, newTask);
+          Cache.invalidate(`task_${member}`);
         });
 
         if (taskUpdates.length > 0) Cache.clear();
       } catch (e) {
+        PerformanceMonitor.trackError();
         throw new Error(`任务分配失败: ${e}`);
       }
     }
@@ -208,6 +321,11 @@ export async function main(ns) {
     /** 渲染主界面 */
     static render(ns, gangInfo, members, cycle) {
       try {
+        if (!gangInfo || !members) {
+          ns.print('警告: 帮派数据不完整，跳过渲染');
+          return;
+        }
+
         ns.clearLog();
         this.#renderHeader(ns, gangInfo, cycle);
         this.#renderMembers(ns, members);
@@ -220,11 +338,24 @@ export async function main(ns) {
 
     /** 头部信息 */
     static #renderHeader(ns, info, cycle) {
+      if (!info || !info.faction) {
+        ns.print('╔═════════════════════════════════════════════════════════════════╗');
+        ns.print('║ ! 无法获取帮派信息                                              ║');
+        ns.print('╠═════════╦══════════════════╦══════════╦═════════════════════════╣');
+        ns.print('║ Member  ║      Task        ║  Stats   ║      Equipment          ║');
+        ns.print('╠═════════╬══════════════════╬══════════╬═════════════════════════╣');
+        return;
+      }
+
       const cycleSymbol = CONFIG.UI.CYCLE[cycle % CONFIG.UI.CYCLE.length];
+      const factionName = info.faction ? info.faction.toString() : '未知帮派';
+      const respectValue = info.respect ? ns.formatNumber(info.respect, 1) : '0';
+      const powerValue = info.power ? ns.formatNumber(info.power, 1) : '0';
+
       ns.print('╔═════════════════════════════════════════════════════════════════╗');
-      ns.print(`║ ${cycleSymbol} ${info.faction.padEnd(14)} ` +
-        `Respect: ${ns.formatNumber(info.respect, 1).padEnd(9)} ` +
-        `Power: ${ns.formatNumber(info.power, 1).padEnd(20)} ║`);
+      ns.print(`║ ${cycleSymbol} ${factionName.padEnd(14)} ` +
+        `Respect: ${respectValue.padEnd(9)} ` +
+        `Power: ${powerValue.padEnd(20)} ║`);
       ns.print('╠═════════╦══════════════════╦══════════╦═════════════════════════╣');
       ns.print('║ Member  ║      Task        ║  Stats   ║      Equipment          ║');
       ns.print('╠═════════╬══════════════════╬══════════╬═════════════════════════╣');
@@ -232,30 +363,64 @@ export async function main(ns) {
 
     /** 成员列表 */
     static #renderMembers(ns, members) {
-      members.slice(0, CONFIG.THRESHOLDS.MEMBERS.MAX).forEach(member => {
-        const info = ns.gang.getMemberInformation(member);
-        const stats = info.str + info.def + info.dex + info.agi;
-        const task = info.task.length > 16 ? `${info.task.substr(0, 13)}...` : info.task.padEnd(16);
-        const equipmentSlots = Array(CONFIG.UI.EQUIP_SLOTS)
-          .fill()
-          .map((_, i) => i < info.upgrades.length + info.augmentations.length ? '■' : '□')
-          .join('');
+      if (!Array.isArray(members) || members.length === 0) {
+        ns.print('║ 无成员数据                                                     ║');
+        return;
+      }
 
-        ns.print(`║ ${this.#truncate(member, 7).padEnd(7)} ║ ${task} ║ ` +
-          `${ns.formatNumber(stats, 1).padStart(8)} ║ ${equipmentSlots.padEnd(23)} ║`);
+      members.slice(0, CONFIG.THRESHOLDS.MEMBERS.MAX).forEach(member => {
+        try {
+          if (!member) {
+            ns.print('║ 无效成员数据                                                   ║');
+            return;
+          }
+
+          const info = ns.gang.getMemberInformation(member);
+          if (!info) {
+            ns.print(`║ ${this.#truncate(member, 7).padEnd(7)} ║ 无法获取数据               ║ -------- ║ ----------------------- ║`);
+            return;
+          }
+
+          const stats = info.str + info.def + info.dex + info.agi;
+          const taskName = info.task ? info.task.toString() : '无任务';
+          const task = taskName.length > 16 ? `${taskName.substr(0, 13)}...` : taskName.padEnd(16);
+          const statsFormatted = ns.formatNumber(stats, 1);
+
+          // 检查 info.upgrades 和 info.augmentations 是否存在
+          const upgradesCount = info.upgrades && Array.isArray(info.upgrades) ? info.upgrades.length : 0;
+          const augmentationsCount = info.augmentations && Array.isArray(info.augmentations) ? info.augmentations.length : 0;
+
+          const equipmentSlots = Array(CONFIG.UI.EQUIP_SLOTS)
+            .fill()
+            .map((_, i) => i < upgradesCount + augmentationsCount ? '■' : '□')
+            .join('');
+
+          ns.print(`║ ${this.#truncate(member, 7).padEnd(7)} ║ ${task} ║ ` +
+            `${statsFormatted.padStart(8)} ║ ${equipmentSlots.padEnd(23)} ║`);
+        } catch (e) {
+          ns.print(`║ Error: ${e.message.substring(0, 60).padEnd(60)} ║`);
+        }
       });
     }
 
     /** 底部状态栏 */
     static #renderFooter(ns, info, members) {
       ns.print('╠═════════╩══════════════════╩══════════╩═════════════════════════╣');
-      const wantedLevel = Math.min(CONFIG.UI.WANTED_MAX_LEVEL, Math.floor(info.wantedLevel));
+
+      if (!info) {
+        ns.print('║ 无法获取帮派信息                                                ║');
+        ns.print('╠═════════════════════════════════════════════════════════════════╣');
+        return;
+      }
+
+      const wantedLevel = Math.min(CONFIG.UI.WANTED_MAX_LEVEL, Math.floor(info.wantedLevel || 0));
       const warfareStatus = info.territoryWarfareEngaged ? '■ WARFARE' : '□ PEACE ';
       const wantedBar = '◆'.repeat(wantedLevel) + '◇'.repeat(CONFIG.UI.WANTED_MAX_LEVEL - wantedLevel);
+      const memberCount = Array.isArray(members) ? members.length : 0;
 
       ns.print(`║ ${warfareStatus} │ Wanted: [${wantedBar}] │ ` +
-        `Members: ${members.length}/${CONFIG.THRESHOLDS.MEMBERS.MAX} │ ` +
-        `Clash: ${ns.formatPercent(info.territoryClashChance, 0).padEnd(5)} ║`);
+        `Members: ${memberCount}/${CONFIG.THRESHOLDS.MEMBERS.MAX} │ ` +
+        `Clash: ${ns.formatPercent(info.territoryClashChance || 0, 0).padEnd(5)} ║`);
       ns.print('╠═════════════════════════════════════════════════════════════════╣');
     }
 
@@ -269,15 +434,21 @@ export async function main(ns) {
         lastUpdate: Date.now()
       };
 
-      ns.print(`║ Respect: ${ns.formatNumber(metrics.totalRespect, 1)} | ` +
-        `Combat: ${ns.formatNumber(metrics.combatEfficiency, 1)} | ` +
-        `Equipment: ${ns.formatPercent(metrics.equipmentCoverage, 1)} | ` +
-        `Peak Wanted: ${metrics.peakWantedLevel.toFixed(1)} ║`);
+      const totalRespect = metrics.totalRespect ? ns.formatNumber(metrics.totalRespect, 1) : '0';
+      const combatEfficiency = metrics.combatEfficiency ? ns.formatNumber(metrics.combatEfficiency, 1) : '0';
+      const equipmentCoverage = metrics.equipmentCoverage ? ns.formatPercent(metrics.equipmentCoverage, 1) : '0%';
+      const peakWantedLevel = metrics.peakWantedLevel ? metrics.peakWantedLevel.toFixed(1) : '0.0';
+
+      ns.print(`║ Respect: ${totalRespect} | ` +
+        `Combat: ${combatEfficiency} | ` +
+        `Equipment: ${equipmentCoverage} | ` +
+        `Peak Wanted: ${peakWantedLevel} ║`);
       ns.print('╚═════════════════════════════════════════════════════════════════╝');
     }
 
     /** 字符串截断 */
     static #truncate(str, len) {
+      if (!str) return ''.padEnd(len);
       return str.length > len ? str.substring(0, len - 1) + '…' : str;
     }
   }
@@ -298,15 +469,35 @@ export async function main(ns) {
   // ===================== 初始化流程 =====================
   const initialize = (ns) => {
     ns.disableLog('ALL');
-    ns.ui.setTailTitle(`GangManager v5.1 [${ns.getScriptName()}]`);
+    ns.ui.setTailTitle(`GangManager v5.2 [${ns.getScriptName()}]`);
     ns.ui.openTail();
     ns.ui.moveTail(1000, 100);
 
+    // 检查帮派系统是否初始化
+    if (!ns.gang.inGang()) {
+      ns.print('错误: 尚未加入帮派，请先加入一个帮派');
+      ns.toast('错误: 尚未加入帮派', 'error');
+      exit();
+    }
+
     // 初始化成员状态
-    ns.gang.getMemberNames().forEach(name => {
+    const members = ns.gang.getMemberNames();
+    if (!Array.isArray(members) || members.length === 0) {
+      ns.print('警告: 未获取到帮派成员，可能是帮派刚刚创建');
+    }
+
+    members.forEach(name => {
       STATE.autoTasks.set(name, null);
     });
-    STATE.metrics.peakWantedLevel = ns.gang.getGangInformation().wantedLevel;
+
+    // 获取初始帮派信息
+    try {
+      const gangInfo = ns.gang.getGangInformation();
+      STATE.metrics.peakWantedLevel = gangInfo.wantedLevel;
+      ns.print(`✅ 成功初始化帮派: ${gangInfo.faction}`);
+    } catch (e) {
+      ns.print(`⚠️ 帮派信息获取失败: ${e.message}`);
+    }
   };
 
   // ===================== 错误处理 =====================
@@ -318,41 +509,120 @@ export async function main(ns) {
   // ===================== 主循环 =====================
   initialize(ns);
 
+  // 等待一点时间让帮派系统完全初始化
+  await ns.sleep(1000);
+
   while (true) {
     try {
-      // 更新指标
-      const gangInfo = ns.gang.getGangInformation();
-      const members = ns.gang.getMemberNames();
+      // 确保在帮派中
+      if (!ns.gang.inGang()) {
+        throw new Error('未加入帮派');
+      }
+
+      // 直接通过API获取数据，不使用缓存
+      let gangInfo, members;
+
+      try {
+        gangInfo = ns.gang.getGangInformation();
+        PerformanceMonitor.trackApiCall();
+        // 添加成功获取信息的日志
+        ns.print(`DEBUG: 成功获取帮派信息: ${gangInfo.faction}`);
+        Cache.set('gangInfo', gangInfo);
+      } catch (e) {
+        ns.print(`⚠️ 获取帮派信息失败: ${e.message}`);
+        gangInfo = Cache.get('gangInfo');
+      }
+
+      try {
+        const rawMembers = ns.gang.getMemberNames();
+        PerformanceMonitor.trackApiCall();
+        // 确保返回的是数组
+        members = Array.isArray(rawMembers) ? rawMembers :
+          (rawMembers ? Object.values(rawMembers) : []);
+
+        if (members.length > 0) {
+          ns.print(`DEBUG: 成功获取成员列表: ${members.length}人`);
+        } else {
+          ns.print(`⚠️ 成员列表为空`);
+        }
+        Cache.set('members', members);
+      } catch (e) {
+        ns.print(`⚠️ 获取成员列表失败: ${e.message}`);
+        members = Cache.get('members') || [];
+      }
+
+      // 确保得到数组
+      members = Array.isArray(members) ? members : [];
+
+      // 调整UI大小
       const A = members.slice(0, CONFIG.THRESHOLDS.MEMBERS.MAX).length;
       ns.ui.resizeTail(CONFIG.UI.WINDOW.W, (A + 8) * 25.7);
 
       // 更新缓存指标
-      const metrics = {
-        totalRespect: gangInfo.respect,
-        peakWantedLevel: Math.max(STATE.metrics.peakWantedLevel, gangInfo.wantedLevel),
-        combatEfficiency: members.reduce((sum, m) => {
-          const info = ns.gang.getMemberInformation(m);
-          return sum + info.str + info.def + info.dex + info.agi;
-        }, 0) / members.length,
-        equipmentCoverage: members.reduce((sum, m) => {
-          const info = ns.gang.getMemberInformation(m);
-          return sum + (info.upgrades.length + info.augmentations.length) / CONFIG.UI.EQUIP_SLOTS;
-        }, 0) / members.length,
-        lastUpdate: Date.now()
-      };
-      Cache.set('metrics', metrics);
+      let metrics;
+      try {
+        metrics = {
+          totalRespect: gangInfo ? gangInfo.respect : 0,
+          peakWantedLevel: gangInfo ? Math.max(STATE.metrics.peakWantedLevel, gangInfo.wantedLevel) : 0,
+          combatEfficiency: members.length > 0 ? members.reduce((sum, m) => {
+            try {
+              const info = ns.gang.getMemberInformation(m);
+              return sum + info.str + info.def + info.dex + info.agi;
+            } catch (e) {
+              return sum;
+            }
+          }, 0) / members.length : 0,
+          equipmentCoverage: members.length > 0 ? members.reduce((sum, m) => {
+            try {
+              const info = ns.gang.getMemberInformation(m);
+              return sum + (info.upgrades.length + info.augmentations.length) / CONFIG.UI.EQUIP_SLOTS;
+            } catch (e) {
+              return sum;
+            }
+          }, 0) / members.length : 0,
+          performance: PerformanceMonitor.getStats(),
+          lastUpdate: Date.now()
+        };
+        Cache.set('metrics', metrics);
+      } catch (e) {
+        ns.print(`⚠️ 更新指标失败: ${e.message}`);
+        metrics = Cache.get('metrics') || {
+          totalRespect: 0,
+          peakWantedLevel: 0,
+          combatEfficiency: 0,
+          equipmentCoverage: 0,
+          performance: { apiCallsPerSecond: 0, cacheHitRate: 0, errorRate: 0 },
+          lastUpdate: Date.now()
+        };
+      }
 
       // 执行核心操作
-      GangOperations.recruitMembers(ns);
-      GangOperations.purchaseEquipment(ns);
-      GangOperations.handleAscensions(ns, STATE);
-      GangOperations.assignTasks(ns, STATE);
+      if (gangInfo && members.length > 0) {
+        try {
+          GangOperations.recruitMembers(ns);
+          GangOperations.purchaseEquipment(ns);
+          GangOperations.handleAscensions(ns, STATE);
+          GangOperations.assignTasks(ns, STATE);
+        } catch (e) {
+          ns.print(`⚠️ 帮派操作失败: ${e.message}`);
+        }
+      } else {
+        ns.print('⚠️ 跳过帮派操作：数据不完整');
+      }
 
       // 渲染界面
       Dashboard.render(ns, gangInfo, members, STATE.cycle++);
 
+      // 每小时重置性能指标
+      if (Date.now() - PerformanceMonitor.metrics.lastReset > 3600000) {
+        PerformanceMonitor.reset();
+      }
+
     } catch (e) {
       handleError(ns, e);
+      PerformanceMonitor.trackError();
+      // 发生错误时等待一段时间再继续
+      await ns.sleep(CONFIG.THRESHOLDS.ERROR_RETRY_DELAY);
     }
     await ns.gang.nextUpdate();
   }
