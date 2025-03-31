@@ -8,6 +8,38 @@ export async function main(ns) {
     const DELETE_ICON = "🗑️";
     const DEBUG_MODE = 0;
     const THREAD_LIMIT = 10000;
+    const CACHE_TTL = 5000; // 5秒缓存
+
+    // 文件缓存
+    let fileCache = { timestamp: 0, data: [] };
+
+    // 获取缓存的文件列表
+    function getCachedFiles(ns) {
+        const now = Date.now();
+        if (now - fileCache.timestamp > CACHE_TTL) {
+            fileCache = {
+                timestamp: now,
+                data: ns.ls('home')
+            };
+        }
+        return fileCache.data;
+    }
+
+    // 过滤脚本文件
+    function filterScriptFiles(ns, dirPath, excludeSelf = true) {
+        return getCachedFiles(ns).filter(f => {
+            const isScript = /\.(js|script)$/i.test(f);
+            const isInDir = normalizePath(f).startsWith(normalizePath(dirPath));
+            const isSelf = f === ns.getScriptName();
+            return isScript && isInDir && !(excludeSelf && isSelf);
+        });
+    }
+
+    // 格式化确认消息
+    function formatConfirmation(message, items, maxPreview = 5) {
+        const preview = items.slice(0, maxPreview).join('\n• ');
+        return `${message}（共 ${items.length} 项）\n• ${preview}${items.length > maxPreview ? '\n...及其他文件' : ''}`;
+    }
 
     // ========================
     // 核心功能实现
@@ -58,6 +90,7 @@ export async function main(ns) {
         let folderPath = normalizePath(folderInput.trim());
         if (folderPath === '//') folderPath = '/';
 
+        // 安全检查：根目录删除需要额外确认
         if (folderPath === '/') {
             const confirmRoot = await ns.prompt("⚠️ 警告：即将删除home服务器所有文件！确认继续？", {
                 type: "boolean"
@@ -68,18 +101,30 @@ export async function main(ns) {
             }
         }
 
-        const files = ns.ls('home').filter(f => normalizePath(f).startsWith(folderPath));
+        const files = getCachedFiles(ns).filter(f => normalizePath(f).startsWith(folderPath));
         if (files.length === 0) {
             return ns.alert(`❌ 在路径 ${folderPath} 中未找到文件！`);
         }
 
-        const filePreview = files.slice(0, 5).join('\n• ');
-        const confirmDelete = await ns.prompt(
-            `找到 ${files.length} 个文件，示例：\n• ${filePreview}${files.length > 5 ? '\n...及其他文件' : ''}\n确定要删除吗？`,
-            { type: "boolean" }
+        // 显示要删除的文件预览
+        const confirmMessage = formatConfirmation(
+            `确定要删除以下文件吗？`,
+            files.map(f => truncateName(f, 50))
         );
+        const confirmDelete = await ns.prompt(confirmMessage, { type: "boolean" });
 
         if (!confirmDelete) {
+            ns.toast("操作已取消", "warning", 2000);
+            return;
+        }
+
+        // 最终确认
+        const finalConfirm = await ns.prompt(
+            '⚠️ 最后一次确认：这将永久删除文件且不可恢复！输入 "DELETE" 确认操作',
+            { type: "text" }
+        );
+
+        if (finalConfirm?.trim() !== "DELETE") {
             ns.toast("操作已取消", "warning", 2000);
             return;
         }
@@ -170,12 +215,7 @@ export async function main(ns) {
     }
 
     async function handleStartScript(ns, targetDir) {
-        const allScripts = ns.ls('home').filter(f => {
-            const isScript = /\.(js|script)$/i.test(f);
-            return isScript &&
-                normalizePath(f).startsWith(targetDir) &&
-                f !== ns.getScriptName();
-        });
+        const allScripts = filterScriptFiles(ns, targetDir);
 
         if (DEBUG_MODE) {
             ns.tprint(`[DEBUG] 目标目录: ${targetDir}`);
@@ -205,18 +245,40 @@ export async function main(ns) {
 
         if (!selected) return;
 
-        const threads = await ns.prompt("启动线程数 (1-" + THREAD_LIMIT + ")", {
-            type: "text",
-            default: 1,
-            validate: input => {
-                if (isNaN(input)) return "必须输入数字";
-                if (input < 1) return "至少1线程";
-                if (input > THREAD_LIMIT) return `超过最大限制 ${THREAD_LIMIT}`;
-                return true;
-            }
-        });
-
         const actualPath = allScripts[scriptChoices.indexOf(selected)];
+
+        // 检查脚本是否存在
+        if (!ns.fileExists(actualPath)) {
+            return ns.alert(`❌ 错误：脚本 ${actualPath} 不存在！`);
+        }
+
+        // 检查脚本权限
+        if (!ns.isRunning(actualPath, 'home')) {
+            const canRun = await ns.prompt(`脚本 ${actualPath} 需要权限才能运行，是否继续？`, {
+                type: "boolean"
+            });
+            if (!canRun) return;
+        }
+
+        // 获取线程数
+        let threads = 1;
+        try {
+            const threadInput = await ns.prompt("启动线程数 (1-" + THREAD_LIMIT + ")", {
+                type: "text",
+                default: 1,
+                validate: input => {
+                    if (isNaN(input)) return "必须输入数字";
+                    if (input < 1) return "至少1线程";
+                    if (input > THREAD_LIMIT) return `超过最大限制 ${THREAD_LIMIT}`;
+                    return true;
+                }
+            });
+            threads = parseInt(threadInput);
+        } catch (error) {
+            ns.toast("线程数设置失败，使用默认值1", "warning", 2000);
+        }
+
+        // 启动脚本
         const pid = ns.run(actualPath, threads);
 
         if (pid) {
