@@ -9,15 +9,18 @@ export async function main(ns) {
   while (!ns.stock.has4SDataTIXAPI()) await ns.sleep(CHECK_INTERVAL);
 
   while (true) {
-      if (!ns.scriptRunning(SCRIPT, HOST)) {
-          const ramNeeded = ns.getScriptRam(SCRIPT);
-          const availableRam = ns.getServerMaxRam(HOST) - ns.getServerUsedRam(HOST);
-          if (availableRam >= ramNeeded) {
-              ns.run(SCRIPT); // 单线程启动
-              ns.toast(`启动 ${SCRIPT} 于 ${HOST}`, 'success');
-          } else {
-              ns.toast(`内存不足！需要 ${ns.formatRam(ramNeeded)}，可用 ${ns.formatRam(availableRam)}`, 'warning');
-          }
+      if (ns.scriptRunning(SCRIPT, HOST)) {
+          break; // 检测到目标脚本正在运行则退出
+      }
+
+      const ramNeeded = ns.getScriptRam(SCRIPT);
+      const availableRam = ns.getServerMaxRam(HOST) - ns.getServerUsedRam(HOST);
+      if (availableRam >= ramNeeded) {
+          ns.run(SCRIPT); // 单线程启动
+          ns.toast(`启动 ${SCRIPT} 于 ${HOST}`, 'success');
+          break; // 启动后退出
+      } else {
+          ns.toast(`内存不足！需要 ${ns.formatRam(ramNeeded)}，可用 ${ns.formatRam(availableRam)}`, 'warning');
       }
       await ns.sleep(MONITOR_INTERVAL);
   }
