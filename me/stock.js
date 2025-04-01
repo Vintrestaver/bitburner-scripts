@@ -28,6 +28,7 @@ export async function main(ns) {
         MARKET_REGIME_WINDOW: 50,   // 市场状态判断窗口
         MAX_POSITIONS: 8,           // 最大持仓数量限制
         MIN_POSITION_HOLD: 5,       // 最小持仓时间(分钟)
+        V: 'v7.0'
     };
 
     const COLORS = {
@@ -98,16 +99,16 @@ export async function main(ns) {
         lastUpdate: 0               // 最后更新时间
     };
 
-    ns.disableLog("ALL");           // 禁用所有日志
-    ns.ui.setTailTitle(`StockManager v7.0 [${ns.getScriptName()}]`); // 设置tail标题
-    ns.ui.openTail();
-    ns.atExit(() => ns.ui.closeTail());            // 打开tail窗口
     const [W, H] = ns.ui.windowSize();// 获取tail窗口大小
+    ns.atExit(() => ns.ui.closeTail());
+    ns.disableLog("ALL");           // 禁用所有日志
+    ns.ui.setTailTitle(`StockManager ${CONFIG.V} [${ns.getScriptName()}]`); // 设置tail标题
+    ns.ui.openTail();               // 打开tail窗口
+    ns.ui.moveTail(W * 0.40, H * 0);// 移动tail窗口位置
 
     await initializeState();        // 初始化状态
 
     while (true) {
-        ns.ui.moveTail(W * 0.40, H * 0);// 移动tail窗口位置
         ns.clearLog();                // 清除日志
 
         if (!(await check4SApiAccess())) continue;// 检查4S API访问权限
@@ -290,7 +291,7 @@ export async function main(ns) {
             );
             if (shortCondition) {
                 const sold = ns.stock.buyShort(sym, position); // 卖空股票
-                if (sold > 0) logTransaction('Sell 📉', sym, sold, analysis.bidPrice); // 记录交易
+                if (sold > 0) logTransaction('Buy 📉', sym, sold, analysis.bidPrice); // 记录交易
             }
         }
     }
@@ -320,15 +321,15 @@ export async function main(ns) {
     // ===================== 仪表盘 =====================
     function displayDashboard() {
         ns.print("═".repeat(80)); // 打印分隔线
-        ns.print(`${COLORS.header}─[ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ]─[ StockManager v6.8 ]` + '─'.repeat(45)); // 打印头部信息
+        ns.print(`${COLORS.header}─[ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ]─[ StockManager ${CONFIG.V} ]` + '─'.repeat(45)); // 打印头部信息
 
         const volColor = getRisk() > 0.2 ? COLORS.warning : COLORS.info; // 根据风险设置颜色
         ns.print([
-            `${COLORS.info}NET: ${fmtMoney(getNetWorth())}`, // 净资产
-            `${COLORS.profit}PRO: ${fmtMoney(STATE.metrics.totalProfit)}`, // 总利润
-            `${COLORS.warning}DRA: ${fmtPct(STATE.metrics.maxDrawdown)}`, // 最大回撤
-            `${COLORS.highlight}LEV: ${getLeverage().toFixed(1)}x`, // 杠杆倍数
-            `${volColor}RISK: ${getRisk().toFixed(2)}` // 风险水平
+            `${COLORS.info}NET: ${fmtMoney(getNetWorth())}${COLORS.reset}`, // 净资产
+            `${COLORS.profit}PRO: ${fmtMoney(STATE.metrics.totalProfit)}${COLORS.reset}`, // 总利润
+            `${COLORS.warning}DRA: ${fmtPct(STATE.metrics.maxDrawdown)}${COLORS.reset}`, // 最大回撤
+            `${COLORS.highlight}LEV: ${getLeverage().toFixed(1)}x${COLORS.reset}`, // 杠杆倍数
+            `${volColor}RISK: ${getRisk().toFixed(2)}${COLORS.reset}` // 风险水平
         ].join(' | ')); // 打印关键指标
         ns.print("═".repeat(80)); // 打印分隔线
 
@@ -341,13 +342,13 @@ export async function main(ns) {
 
         ns.print(`${COLORS.header}──📜 Latest Transactions ${'─'.repeat(80 - 25)}${COLORS.reset}`); // 打印交易记录标题
         STATE.transactions.slice(-5).forEach(t => {
-            const profitColor = t.profit > 0 ? COLORS.profit : COLORS.loss; // 根据收益设置颜色
+            const profitColor = t.profit >= 0 ? COLORS.profit : COLORS.loss; // 根据收益设置颜色
             ns.print(
                 ` ${COLORS.info}${t.time} ${t.icon.padEnd(5)} ` +
                 `${getTrendColor(t.sym)}${t.sym.padEnd(5)} ` +
                 `${COLORS.highlight}${fmtNum(Math.abs(t.shares))}@${fmtNum(t.price)} ` +
-                `${profitColor}${t.profit > 0 ? '▲' : t.profit < 0 ? '▼' : '——'}` +
-                `${t.profit != 0 ? fmtMoney(t.profit) : ''}`
+                `${profitColor}${t.profit >= 0 ? '▲' : '▼'} ` +
+                `${t.profit != 0 ? fmtMoney(t.profit) : ''}${COLORS.reset}`
             ); // 打印交易记录
         });
     }
@@ -667,7 +668,7 @@ export async function main(ns) {
             if (CONFIG.hasOwnProperty(key)) {
                 const oldValue = CONFIG[key];
                 CONFIG[key] = newConfig[key]; // 更新配置参数
-                ns.print(`${COLORS.info}配置更新: ${key} ${oldValue.toFixed(2)} → ${newConfig[key].toFixed(2)}${COLORS.reset}`); // 打印配置更新信息
+                // ns.print(`${COLORS.info}配置更新: ${key} ${oldValue.toFixed(2)} → ${newConfig[key].toFixed(2)}${COLORS.reset}`); // 打印配置更新信息
             }
         });
     }
