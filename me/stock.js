@@ -1,5 +1,5 @@
 /**
- * Bitburner 股票自动交易脚本 v7.0 - 量化交易系统 
+ * Bitburner 股票自动交易脚本 - 量化交易系统 
  * @param {NS} ns Bitburner 游戏API实例
  */
 export async function main(ns) {
