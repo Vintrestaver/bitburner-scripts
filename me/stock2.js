@@ -10,7 +10,7 @@ export async function main(ns) {
     ns.disableLog('ALL');
     const CONFIG = initConfig(ns);
 
-    // 初始化全局状态
+    // Initialize global state
     const state = {
         symbols: ns.stock.getSymbols(),
         transactions: [],
@@ -23,17 +23,17 @@ export async function main(ns) {
         }
     };
 
-    // 初始化所有模块
+    // Initialize all modules
     const marketState = initMarketState(ns, CONFIG);
     const analysis = initAnalysis(ns, CONFIG);
-    const trading = initTrading(ns, CONFIG, marketState);
+    const trading = initTrading(ns, CONFIG, marketState, analysis);
     const dashboard = initDashboard(ns, CONFIG);
     const utils = initUtils(ns, CONFIG);
 
-    // 等待获取4S API访问权限
+    // Wait for 4S API access
     await utils.check4SApiAccess();
 
-    // 初始化历史数据
+    // Initialize historical data
     for (const sym of state.symbols) {
         state.history.set(sym, {
             prices: [],
@@ -47,10 +47,10 @@ export async function main(ns) {
         });
     }
 
-    // 主循环
+    // Main loop
     while (true) {
         try {
-            // 更新市场数据
+            // Update market data
             for (const sym of state.symbols) {
                 const data = state.history.get(sym);
                 const price = (ns.stock.getBidPrice(sym) + ns.stock.getAskPrice(sym)) / 2;
@@ -61,10 +61,10 @@ export async function main(ns) {
                 data.rsi = analysis.calculateRSI(data.prices);
             }
 
-            // 更新市场状态
+            // Update market state
             marketState.update(state.symbols, state.history, trading);
 
-            // 执行交易
+            // Execute trades
             for (const sym of state.symbols) {
                 const result = trading.managePosition(sym, state);
                 if (result) {
@@ -79,16 +79,16 @@ export async function main(ns) {
                 }
             }
 
-            // 优化内存使用
+            // Optimize memory usage
             utils.optimizeMemory(state, CONFIG);
             utils.cleanupCache(state, state.history, state.metrics);
 
-            // 更新界面
+            // Update display
             ns.clearLog();
             dashboard.display(state, trading, marketState);
             dashboard.adjustWindow();
 
-            // 等待下一个周期
+            // Wait for next cycle
             await ns.sleep(2000 + Math.random() * 1000);
 
         } catch (error) {

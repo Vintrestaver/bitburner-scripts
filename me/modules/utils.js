@@ -9,7 +9,7 @@ export function initUtils(ns, CONFIG) {
                 if (retries++ % 5 === 0) {
                     ns.stock.purchase4SMarketDataTixApi();
                 }
-                ns.print(`等待4S API权限... (${this.fmtNum(retries)}次重试)`);
+                ns.print(`Waiting for 4S API access... (${this.fmtNum(retries)} retries)`);
                 await ns.sleep(2000 + Math.random() * 3000);
             }
             return true;
@@ -27,11 +27,11 @@ export function initUtils(ns, CONFIG) {
                 }, null, 2)
             };
 
-            ns.print(`\x1b[38;5;196m⚠️ [${errorInfo.time}] 错误: ${error.message}\x1b[0m`);
+            ns.print(`\x1b[38;5;196m⚠️ [${errorInfo.time}] Error: ${error.message}\x1b[0m`);
 
             if (error.message.includes('4S API')) {
                 ns.stock.purchase4SMarketDataTixApi();
-                ns.tprint('已自动重新获取4S API访问权限');
+                ns.tprint('Automatically re-acquired 4S API access');
             }
         },
 

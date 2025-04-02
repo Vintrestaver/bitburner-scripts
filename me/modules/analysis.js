@@ -1,121 +1,145 @@
 /** @param {NS} ns */
 export function initAnalysis(ns, CONFIG) {
     return {
-        calculateRSI(prices) {
-            if (prices.length < CONFIG.RSI_WINDOW + 1) return 50;
+        analyzeStock(sym, data, ns) {
+            const price = (ns.stock.getBidPrice(sym) + ns.stock.getAskPrice(sym)) / 2;
+            const forecast = ns.stock.getForecast(sym);
+            const volatility = ns.stock.getVolatility(sym);
 
-            const gains = new Array(CONFIG.RSI_WINDOW).fill(0);
-            const losses = new Array(CONFIG.RSI_WINDOW).fill(0);
-            let gainIndex = 0, lossIndex = 0;
-
-            let prevPrice = prices[prices.length - CONFIG.RSI_WINDOW - 1];
-
-            for (let i = prices.length - CONFIG.RSI_WINDOW; i < prices.length; i++) {
-                const delta = prices[i] - prevPrice;
-                if (delta > 0) {
-                    gains[gainIndex] = delta;
-                    gainIndex = (gainIndex + 1) % CONFIG.RSI_WINDOW;
-                } else {
-                    losses[lossIndex] = -delta;
-                    lossIndex = (lossIndex + 1) % CONFIG.RSI_WINDOW;
-                }
-                prevPrice = prices[i];
+            if (!data) {
+                return {
+                    askPrice: ns.stock.getAskPrice(sym),
+                    bidPrice: ns.stock.getBidPrice(sym),
+                    price,
+                    forecast,
+                    volatility,
+                    rsi: 50,
+                    trend: forecast > 0.5 ? 'bull' : 'bear',
+                    efficiency: 0.5,
+                    correlation: 0
+                };
             }
 
-            const avgGain = gains.reduce((a, b) => a + b, 0) / CONFIG.RSI_WINDOW;
-            const avgLoss = losses.reduce((a, b) => a + b, 0) / CONFIG.RSI_WINDOW;
+            // 计算RSI
+            const rsi = this.calculateRSI(data.prices);
+
+            // 计算趋势效率
+            const efficiency = this.calculateEfficiency(data.prices);
+
+            // 计算相关性
+            const correlation = this.calculateCorrelation(data.prices);
+
+            // 综合趋势判断
+            const trend = this.determineTrend(forecast, rsi, data.maShort, data.maLong);
+
+            return {
+                askPrice: ns.stock.getAskPrice(sym),
+                bidPrice: ns.stock.getBidPrice(sym),
+                price,
+                forecast,
+                volatility,
+                rsi,
+                trend,
+                efficiency,
+                correlation
+            };
+        },
+
+        updateMA(data, type, window, price) {
+            const windowArray = data[type + 'Window'];
+            const sum = data[type + 'Sum'];
+
+            windowArray.push(price);
+            data[type + 'Sum'] = sum + price;
+
+            if (windowArray.length > window) {
+                data[type + 'Sum'] -= windowArray.shift();
+            }
+
+            data[type] = data[type + 'Sum'] / windowArray.length;
+        },
+
+        calculateRSI(prices, period = 14) {
+            if (prices.length < period + 1) return 50;
+
+            let gains = 0;
+            let losses = 0;
+
+            for (let i = prices.length - period; i < prices.length; i++) {
+                const difference = prices[i] - prices[i - 1];
+                if (difference >= 0) {
+                    gains += difference;
+                } else {
+                    losses -= difference;
+                }
+            }
+
+            const avgGain = gains / period;
+            const avgLoss = losses / period;
 
             return avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
         },
 
-        calculateMomentum(prices) {
-            if (prices.length < CONFIG.TREND_WINDOW + 1) return 0;
+        calculateEfficiency(prices, window = 20) {
+            if (prices.length < window) return 0.5;
 
-            const recentPrices = prices.slice(-CONFIG.TREND_WINDOW);
-            const firstPrice = recentPrices[0];
-            const lastPrice = recentPrices[recentPrices.length - 1];
+            const priceWindow = prices.slice(-window);
+            const directionalMove = Math.abs(priceWindow[priceWindow.length - 1] - priceWindow[0]);
 
-            return (lastPrice - firstPrice) / firstPrice;
-        },
-
-        calculateCorrelation(prices) {
-            if (prices.length < CONFIG.MARKET_REGIME_WINDOW + 1) return 0;
-
-            const recentPrices = prices.slice(-CONFIG.MARKET_REGIME_WINDOW);
-            const avgPrice = recentPrices.reduce((a, b) => a + b, 0) / recentPrices.length;
-
-            const deviations = recentPrices.map(p => p - avgPrice);
-            const squaredDeviations = deviations.map(d => d * d);
-
-            const variance = squaredDeviations.reduce((a, b) => a + b, 0) / squaredDeviations.length;
-            const stdDev = Math.sqrt(variance);
-
-            return stdDev / avgPrice;
-        },
-
-        calculateEfficiency(prices) {
-            if (prices.length < CONFIG.TREND_WINDOW + 1) return 0;
-
-            const recentPrices = prices.slice(-CONFIG.TREND_WINDOW);
-            const firstPrice = recentPrices[0];
-            const lastPrice = recentPrices[recentPrices.length - 1];
-
-            const totalChange = Math.abs(lastPrice - firstPrice);
-            const totalDistance = recentPrices.slice(1).reduce((acc, p, i) =>
-                acc + Math.abs(p - recentPrices[i]), 0);
-
-            return totalDistance === 0 ? 0 : totalChange / totalDistance;
-        },
-
-        calculatePositionScore(analysis) {
-            return (
-                0.3 * (analysis.forecast - 0.5) +
-                0.2 * Math.min(1, Math.max(0, (70 - analysis.rsi) / 40)) +
-                0.2 * (1 - analysis.volatilityTrend) +
-                0.15 * analysis.efficiency +
-                0.15 * (1 - Math.abs(analysis.correlation))
-            );
-        },
-
-        updateMA(data, type, window, price) {
-            const queue = data[`${type}Window`];
-            const sumKey = `${type}Sum`;
-
-            queue.push(price);
-            data[sumKey] += price;
-
-            if (queue.length > window) {
-                const removed = queue.shift();
-                data[sumKey] -= removed;
+            let volatilityMove = 0;
+            for (let i = 1; i < priceWindow.length; i++) {
+                volatilityMove += Math.abs(priceWindow[i] - priceWindow[i - 1]);
             }
-            data[type] = data[sumKey] / queue.length;
+
+            return volatilityMove === 0 ? 0 : directionalMove / volatilityMove;
         },
 
-        analyzeStock(sym, data, ns) {
-            const volatility = ns.stock.getVolatility(sym);
-            const momentum = this.calculateMomentum(data.prices);
+        calculateCorrelation(prices, window = 20) {
+            if (prices.length < window + 1) return 0;
 
-            return {
-                symbol: sym,
-                bidPrice: ns.stock.getBidPrice(sym),
-                askPrice: ns.stock.getAskPrice(sym),
-                trend: data.maShort > data.maLong ? 'bull' : 'bear',
-                rsi: data.rsi,
-                volatility,
-                momentum: (data.maShort - data.maLong) / data.maLong * 100,
-                forecast: ns.stock.getForecast(sym),
-                volatilityTrend: volatility / this.getMarketVolatility(ns),
-                correlation: this.calculateCorrelation(data.prices),
-                efficiency: this.calculateEfficiency(data.prices),
-            };
+            const returns = [];
+            for (let i = 1; i < prices.length; i++) {
+                returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+            }
+
+            const recentReturns = returns.slice(-window);
+            const laggedReturns = returns.slice(-window - 1, -1);
+
+            const meanRecent = recentReturns.reduce((a, b) => a + b, 0) / window;
+            const meanLagged = laggedReturns.reduce((a, b) => a + b, 0) / window;
+
+            let covariance = 0;
+            let varRecent = 0;
+            let varLagged = 0;
+
+            for (let i = 0; i < window; i++) {
+                const diffRecent = recentReturns[i] - meanRecent;
+                const diffLagged = laggedReturns[i] - meanLagged;
+
+                covariance += diffRecent * diffLagged;
+                varRecent += diffRecent * diffRecent;
+                varLagged += diffLagged * diffLagged;
+            }
+
+            const stdRecent = Math.sqrt(varRecent / window);
+            const stdLagged = Math.sqrt(varLagged / window);
+
+            return stdRecent * stdLagged === 0 ? 0 :
+                (covariance / window) / (stdRecent * stdLagged);
         },
 
-        getMarketVolatility(ns) {
-            const symbols = ns.stock.getSymbols();
-            return symbols.reduce((acc, sym) => {
-                const vol = ns.stock.getVolatility(sym);
-                return acc + (vol > 0 ? vol : 0);
-            }, 0) / symbols.length || 0;
+        determineTrend(forecast, rsi, maShort, maLong) {
+            const forecastSignal = forecast > 0.55 ? 1 : forecast < 0.45 ? -1 : 0;
+            const rsiSignal = rsi > 70 ? -1 : rsi < 30 ? 1 : 0;
+            const maSignal = maShort > maLong ? 1 : maShort < maLong ? -1 : 0;
+
+            const signalSum = forecastSignal + rsiSignal + maSignal;
+
+            if (Math.abs(signalSum) >= 2) {
+                return signalSum > 0 ? 'bull' : 'bear';
+            }
+
+            return forecast > 0.5 ? 'bull' : 'bear';
         }
     };
 }
