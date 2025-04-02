@@ -2,10 +2,10 @@
 export async function main(ns) {
     ns.atExit(() => ns.ui.closeTail());
     ns.disableLog('ALL');
-    ns.ui.setTailTitle(`AutoHack v2.6 [${ns.getScriptName()}]`);
+    ns.ui.setTailTitle(`AutoHack v2.8 [${ns.getScriptName()}]`);
     ns.ui.openTail();
     const [W, H] = ns.ui.windowSize();
-
+    ns.ui.moveTail(W * 0.6, H * 0);
     // 脚本文件配置
     const FILES = ['grow.script', 'weak.script', 'hack.script']; // 三种操作脚本
     let EXCLUDE = []; // 排除的服务器列表
@@ -25,7 +25,7 @@ export async function main(ns) {
 
     let servers, hosts, targets, exes, tarIndex, loop, hType, act;
     const sortDesc = arr => arr.sort((a, b) => b[0] - a[0]);
-    const truncate = s => s.length > 14 ? s.substring(0, 14) + '...' : s;
+    const truncate = s => s.length > 12 ? s.substring(0, 12) + '...' : s;
 
     /**
      * 服务器信息管理类
@@ -67,8 +67,8 @@ export async function main(ns) {
 
     // 日志显示设置
     const LOG_SETTINGS = {
-        level: 2,                    // 日志级别 1-ERROR, 2-INFO, 3-DEBUG
-        tabWidth: 4,                 // 制表符宽度(字符数)
+        level: 3,                    // 日志级别 1-ERROR, 2-INFO, 3-DEBUG
+        tabWidth: 1,                 // 制表符宽度(字符数)
         setLevel: (lvl) => LOG_SETTINGS.level = lvl,
         setTabWidth: (width) => LOG_SETTINGS.tabWidth = Math.max(1, width)
     };
@@ -83,17 +83,17 @@ export async function main(ns) {
         const colWidths = {
             cycle: 3 * LOG_SETTINGS.tabWidth,
             target: 17 * LOG_SETTINGS.tabWidth,
-            security: 8 * LOG_SETTINGS.tabWidth,
+            security: 10 * LOG_SETTINGS.tabWidth,
             progress: 20 * LOG_SETTINGS.tabWidth
         };
 
         // 绘制表格顶部
         ns.print(`╔${'═'.repeat(colWidths.cycle)}╦${'═'.repeat(colWidths.target)}╦${'═'.repeat(colWidths.security)}╦${'═'.repeat(colWidths.progress)}╗`);
-        ns.print(`║ ${CYCLE[CYCLE[0]].toString().padEnd(colWidths.cycle-2)} ║ ${'TARGETS'.padStart(colWidths.target/2+3).padEnd(colWidths.target-2)} ║ ${'SECURITY'.padStart(colWidths.security/2).padEnd(colWidths.security-2)} ║ ${'PROGRESS & FUNDS'.padStart(colWidths.progress/2+4).padEnd(colWidths.progress-2)} ║`);
+        ns.print(`║ ${CYCLE[CYCLE[0]].toString().padEnd(colWidths.cycle - 2)} ║ ${'TARGETS'.padStart(colWidths.target / 2 + 3).padEnd(colWidths.target - 2)} ║ ${'SECURITY'.padStart(colWidths.security / 2).padEnd(colWidths.security - 2)} ║ ${'PROGRESS & FUNDS'.padStart(colWidths.progress / 2 + 4).padEnd(colWidths.progress - 2)} ║`);
         ns.print(`╠${'═'.repeat(colWidths.cycle)}╬${'═'.repeat(colWidths.target)}╬${'═'.repeat(colWidths.security)}╬${'═'.repeat(colWidths.progress)}╣`);
 
         const topTargets = targets.slice(0, targets.length);
-        topTargets.slice(0, 20).forEach(t => {
+        topTargets.slice(0, 100).forEach(t => {
             const maxMoney = serverInfo.getMaxMoney(t[1]);
             const currentMoney = serverInfo.getMoneyAvailable(t[1]);
             const ratio = currentMoney / maxMoney || 0;
@@ -106,7 +106,7 @@ export async function main(ns) {
             const filled1 = Math.floor(sec * 8);
             const progressBar1 = '■'.repeat(filled1) + '□'.repeat(8 - filled1);
 
-            ns.print(`║ ${(act[t[1]] || ' ').padEnd(colWidths.cycle-2)} ║ ${truncate(t[1]).padEnd(colWidths.target-2)} ║ ${progressBar1.padEnd(colWidths.security-2)} ║ ${progressBar} ${funds.padEnd(colWidths.progress-10)} ║`);
+            ns.print(`║ ${(act[t[1]] || ' ').padEnd(colWidths.cycle - 2)} ║ ${truncate(t[1]).padEnd(colWidths.target - 2)} ║ ${progressBar1.padEnd(colWidths.security - 2)} ║ ${progressBar} ${funds.padEnd(colWidths.progress - 13)} ║`);
         });
 
         // 绘制表格底部
@@ -123,7 +123,7 @@ export async function main(ns) {
             `TG:${targets.length}`
         ].join('  ');
 
-        ns.print(`║ EXE:${exeStatus}  ${hostStats.padEnd(colWidths.cycle + colWidths.target + colWidths.security + colWidths.progress - 10)}║`);
+        ns.print(`║ EXE:${exeStatus} ${hostStats.padEnd(colWidths.cycle + colWidths.target + colWidths.security + colWidths.progress - 8)}║`);
         ns.print(`╚${'═'.repeat(colWidths.cycle + colWidths.target + colWidths.security + colWidths.progress + 3)}╝`);
     }
 
@@ -167,7 +167,7 @@ export async function main(ns) {
                         targets.push([Math.floor(serverInfo.getMaxMoney(server) / serverInfo.getMinSecurityLevel(server)), server]);
                     }
 
-                    if ( serverInfo.getMaxRam(server) > 4 && !EXCLUDE.includes(server)) {
+                    if (serverInfo.getMaxRam(server) > 4 && !EXCLUDE.includes(server)) {
                         hosts.push([serverInfo.getMaxRam(server), server]);
                     }
 
@@ -276,7 +276,7 @@ export async function main(ns) {
      * 3. 不影响原函数逻辑
      */
     function withTiming(ns, label, fn) {
-        return async function(...args) {
+        return async function (...args) {
             const start = Date.now();
             try {
                 return await fn.apply(this, args);
@@ -295,7 +295,7 @@ export async function main(ns) {
      * 3. 根据可用RAM计算最优线程数
      * 4. 执行相应操作
      */
-    const allocateResourcesImproved = withTiming(ns, '资源分配', async function() {
+    const allocateResourcesImproved = withTiming(ns, '资源分配', async function () {
         for (const [_, host] of hosts) {
             if (host === 'home') continue;
 
@@ -361,7 +361,7 @@ export async function main(ns) {
         if (cycles++ % 10 === 0) {
             serverInfo.clearCache();
         }
-        ns.ui.moveTail(W * 0.6, 0);
+
         servers = [];
         targets = [];
         hosts = [[Math.max(serverInfo.getMaxRam('home') - 50, 0), 'home']];
@@ -369,6 +369,7 @@ export async function main(ns) {
         tarIndex = 0;
         loop = false;
         act = {};
+
         EXCLUDE = [...Array.from(
             { length: ns.hacknet.numNodes() },
             (_, i) => ns.hacknet.getNodeStats(i).name
@@ -384,6 +385,6 @@ export async function main(ns) {
             await ns.sleep(5000);
         }
         ns.ui.resizeTail(570, Math.min((targets.length * 24) + 180, 20 * 24 + 180));
-        await ns.sleep(1000);
+        await ns.sleep(100);
     }
 }
