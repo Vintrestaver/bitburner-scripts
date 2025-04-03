@@ -9,7 +9,10 @@ export async function main(ns) {
     // 脚本文件配置
     const FILES = ['grow.script', 'weak.script', 'hack.script']; // 三种操作脚本
     let EXCLUDE = []; // 排除的服务器列表
-    const CYCLE = [0, "▁", '▂', '▃', '▄', '▅', '▆', '▇', '█']; // 进度条动画帧
+    const CYCLE = ['▁▂▃▄▅▆▇█'];
+    let currentCycleIndex = 0;
+    let currentAnimationType = 0;
+    const ANIMATION_CYCLE = 100; // 每100次循环切换一次动画类型
     const HACK_COMMANDS = ['brutessh', 'ftpcrack', 'relaysmtp', 'httpworm', 'sqlinject']; // 破解工具列表
 
     try {
@@ -23,8 +26,15 @@ export async function main(ns) {
         return;
     }
 
-    let servers, hosts, targets, exes, tarIndex, loop, hType, act;
-    const sortDesc = arr => arr.sort((a, b) => b[0] - a[0]);
+    let servers = [],
+        hosts = [[Math.max(ns.getServerMaxRam('home') - 50, 0), 'home']],
+        targets = [],
+        exes = [],
+        tarIndex = 0,
+        loop = false,
+        hType = 0,
+        act = {};
+    const sortDesc = arr => arr ? arr.sort((a, b) => b[0] - a[0]) : [];
     const truncate = s => s.length > 12 ? s.substring(0, 12) + '...' : s;
 
     /**
@@ -36,26 +46,87 @@ export async function main(ns) {
         constructor(ns) {
             this.ns = ns;
             this.cache = {};
+            this.statsCache = {};
+            this.lastUpdated = {};
         }
 
-        getMaxMoney(host) { return this.ns.getServerMaxMoney(host); }
-        getMoneyAvailable(host) { return this.ns.getServerMoneyAvailable(host); }
-        getMaxRam(host) { return this.ns.getServerMaxRam(host); }
-        getUsedRam(host) { return this.ns.getServerUsedRam(host); }
-        getPortsRequired(host) { return this.ns.getServerNumPortsRequired(host); }
-        getRequiredHackingLevel(host) { return this.ns.getServerRequiredHackingLevel(host); }
-        getSecurityLevel(host) { return this.ns.getServerSecurityLevel(host); }
-        getMinSecurityLevel(host) { return this.ns.getServerMinSecurityLevel(host); }
+        // 批量获取服务器信息
+        batchGetServers(hosts) {
+            const now = Date.now();
+            const results = {};
 
+            // 先从缓存获取有效数据
+            hosts.forEach(host => {
+                if (this.cache[host] && now - (this.lastUpdated[host] || 0) < 5000) {
+                    results[host] = this.cache[host];
+                }
+            });
+
+            // 获取需要更新的服务器
+            const toUpdate = hosts.filter(host => !results[host]);
+            toUpdate.forEach(host => {
+                this.cache[host] = this.ns.getServer(host);
+                this.lastUpdated[host] = now;
+                results[host] = this.cache[host];
+            });
+
+            return results;
+        }
+
+        // 常用统计信息的快捷访问方法
+        getMaxMoney(host) {
+            return this._getCachedStat(host, 'maxMoney', () => this.ns.getServerMaxMoney(host));
+        }
+        getMoneyAvailable(host) {
+            return this._getCachedStat(host, 'moneyAvailable', () => this.ns.getServerMoneyAvailable(host));
+        }
+        getMaxRam(host) {
+            return this._getCachedStat(host, 'maxRam', () => this.ns.getServerMaxRam(host));
+        }
+        getUsedRam(host) {
+            return this._getCachedStat(host, 'usedRam', () => this.ns.getServerUsedRam(host));
+        }
+        getPortsRequired(host) {
+            return this._getCachedStat(host, 'portsRequired', () => this.ns.getServerNumPortsRequired(host));
+        }
+        getRequiredHackingLevel(host) {
+            return this._getCachedStat(host, 'requiredHackingLevel', () => this.ns.getServerRequiredHackingLevel(host));
+        }
+        getSecurityLevel(host) {
+            return this._getCachedStat(host, 'securityLevel', () => this.ns.getServerSecurityLevel(host));
+        }
+        getMinSecurityLevel(host) {
+            return this._getCachedStat(host, 'minSecurityLevel', () => this.ns.getServerMinSecurityLevel(host));
+        }
+
+        // 获取完整服务器对象
         getServer(host) {
             if (!this.cache[host]) {
                 this.cache[host] = this.ns.getServer(host);
+                this.lastUpdated[host] = Date.now();
             }
             return this.cache[host];
         }
 
+        // 内部缓存方法
+        _getCachedStat(host, statName, getter) {
+            const now = Date.now();
+            if (!this.statsCache[host] ||
+                !this.statsCache[host][statName] ||
+                now - (this.lastUpdated[host] || 0) > 3000) {
+
+                if (!this.statsCache[host]) this.statsCache[host] = {};
+                this.statsCache[host][statName] = getter();
+                this.lastUpdated[host] = now;
+            }
+            return this.statsCache[host][statName];
+        }
+
+        // 清理缓存
         clearCache() {
             this.cache = {};
+            this.statsCache = {};
+            this.lastUpdated = {};
         }
     }
 
@@ -73,13 +144,8 @@ export async function main(ns) {
         setTabWidth: (width) => LOG_SETTINGS.tabWidth = Math.max(1, width)
     };
 
-    function generateLog(level = 2) {
-        if (level > LOG_SETTINGS.level) return;
-        if (CYCLE[0] >= 8) CYCLE[0] = 0;
-        CYCLE[0]++;
-        ns.clearLog();
-
-        // 动态计算表格列宽
+    // 预计算表格边框模板
+    const BORDER_TEMPLATES = (() => {
         const colWidths = {
             cycle: 3 * LOG_SETTINGS.tabWidth,
             target: 17 * LOG_SETTINGS.tabWidth,
@@ -87,13 +153,29 @@ export async function main(ns) {
             progress: 20 * LOG_SETTINGS.tabWidth
         };
 
-        // 绘制表格顶部
-        ns.print(`╔${'═'.repeat(colWidths.cycle)}╦${'═'.repeat(colWidths.target)}╦${'═'.repeat(colWidths.security)}╦${'═'.repeat(colWidths.progress)}╗`);
-        ns.print(`║ ${CYCLE[CYCLE[0]].toString().padEnd(colWidths.cycle - 2)} ║ ${'TARGETS'.padStart(colWidths.target / 2 + 3).padEnd(colWidths.target - 2)} ║ ${'SECURITY'.padStart(colWidths.security / 2).padEnd(colWidths.security - 2)} ║ ${'PROGRESS & FUNDS'.padStart(colWidths.progress / 2 + 4).padEnd(colWidths.progress - 2)} ║`);
-        ns.print(`╠${'═'.repeat(colWidths.cycle)}╬${'═'.repeat(colWidths.target)}╬${'═'.repeat(colWidths.security)}╬${'═'.repeat(colWidths.progress)}╣`);
+        const topBorder = `╔${'═'.repeat(colWidths.cycle)}╦${'═'.repeat(colWidths.target)}╦${'═'.repeat(colWidths.security)}╦${'═'.repeat(colWidths.progress)}╗`;
+        const header = `║ ${' '.repeat(colWidths.cycle - 2)} ║ ${'TARGETS'.padStart(colWidths.target / 2 + 3).padEnd(colWidths.target - 2)} ║ ${'SECURITY'.padStart(colWidths.security / 2).padEnd(colWidths.security - 2)} ║ ${'PROGRESS & FUNDS'.padStart(colWidths.progress / 2 + 4).padEnd(colWidths.progress - 2)} ║`;
+        const divider = `╠${'═'.repeat(colWidths.cycle)}╬${'═'.repeat(colWidths.target)}╬${'═'.repeat(colWidths.security)}╬${'═'.repeat(colWidths.progress)}╣`;
+
+        return { topBorder, header, divider, colWidths };
+    })();
+
+    function generateLog(level = 2) {
+        if (level > LOG_SETTINGS.level) return;
+        if (cycles % ANIMATION_CYCLE === 0) {
+            currentAnimationType = (currentAnimationType + 1) % CYCLE.length;
+        }
+        currentCycleIndex = (currentCycleIndex + 1) % CYCLE[currentAnimationType].length;
+        ns.clearLog();
+
+        // 使用预计算的模板
+        ns.print(BORDER_TEMPLATES.topBorder);
+        const cycleChar = CYCLE[currentAnimationType][currentCycleIndex];
+        ns.print(`║ ${cycleChar.toString().padEnd(BORDER_TEMPLATES.colWidths.cycle - 2)} ║ ${'TARGETS'.padStart(BORDER_TEMPLATES.colWidths.target / 2 + 3).padEnd(BORDER_TEMPLATES.colWidths.target - 2)} ║ ${'SECURITY'.padStart(BORDER_TEMPLATES.colWidths.security / 2).padEnd(BORDER_TEMPLATES.colWidths.security - 2)} ║ ${'PROGRESS & FUNDS'.padStart(BORDER_TEMPLATES.colWidths.progress / 2 + 4).padEnd(BORDER_TEMPLATES.colWidths.progress - 2)} ║`);
+        ns.print(BORDER_TEMPLATES.divider);
 
         const topTargets = targets.slice(0, targets.length);
-        topTargets.slice(0, 100).forEach(t => {
+        topTargets.slice(0, 20).forEach(t => {
             const maxMoney = serverInfo.getMaxMoney(t[1]);
             const currentMoney = serverInfo.getMoneyAvailable(t[1]);
             const ratio = currentMoney / maxMoney || 0;
@@ -106,11 +188,11 @@ export async function main(ns) {
             const filled1 = Math.floor(sec * 8);
             const progressBar1 = '■'.repeat(filled1) + '□'.repeat(8 - filled1);
 
-            ns.print(`║ ${(act[t[1]] || ' ').padEnd(colWidths.cycle - 2)} ║ ${truncate(t[1]).padEnd(colWidths.target - 2)} ║ ${progressBar1.padEnd(colWidths.security - 2)} ║ ${progressBar} ${funds.padEnd(colWidths.progress - 13)} ║`);
+            ns.print(`║ ${(act[t[1]] || ' ').padEnd(BORDER_TEMPLATES.colWidths.cycle - 2)} ║ ${truncate(t[1]).padEnd(BORDER_TEMPLATES.colWidths.target - 2)} ║ ${progressBar1.padEnd(BORDER_TEMPLATES.colWidths.security - 2)} ║ ${progressBar} ${funds.padEnd(BORDER_TEMPLATES.colWidths.progress - 13)} ║`);
         });
 
         // 绘制表格底部
-        ns.print(`╠${'═'.repeat(colWidths.cycle)}╩${'═'.repeat(colWidths.target)}╩${'═'.repeat(colWidths.security)}╩${'═'.repeat(colWidths.progress)}╣`);
+        ns.print(`╠${'═'.repeat(BORDER_TEMPLATES.colWidths.cycle)}╩${'═'.repeat(BORDER_TEMPLATES.colWidths.target)}╩${'═'.repeat(BORDER_TEMPLATES.colWidths.security)}╩${'═'.repeat(BORDER_TEMPLATES.colWidths.progress)}╣`);
 
         const exeStatus = HACK_COMMANDS.map(cmd =>
             exes.includes(cmd) ? '■' : '□'
@@ -123,8 +205,8 @@ export async function main(ns) {
             `TG:${targets.length}`
         ].join('  ');
 
-        ns.print(`║ EXE:${exeStatus} ${hostStats.padEnd(colWidths.cycle + colWidths.target + colWidths.security + colWidths.progress - 8)}║`);
-        ns.print(`╚${'═'.repeat(colWidths.cycle + colWidths.target + colWidths.security + colWidths.progress + 3)}╝`);
+        ns.print(`║ EXE:${exeStatus} ${hostStats.padEnd(BORDER_TEMPLATES.colWidths.cycle + BORDER_TEMPLATES.colWidths.target + BORDER_TEMPLATES.colWidths.security + BORDER_TEMPLATES.colWidths.progress - 8)}║`);
+        ns.print(`╚${'═'.repeat(BORDER_TEMPLATES.colWidths.cycle + BORDER_TEMPLATES.colWidths.target + BORDER_TEMPLATES.colWidths.security + BORDER_TEMPLATES.colWidths.progress + 3)}╝`);
     }
 
     /**
@@ -138,15 +220,26 @@ export async function main(ns) {
      * 2. 收集有效目标服务器
      * 3. 收集可用主机资源
      */
-    async function scanNetwork(host, current, depth = 0, maxDepth = 10) {
-        if (depth > maxDepth) return;
-        try {
-            for (const server of ns.scan(current)) {
-                if (host === server || EXCLUDE.includes(server)) continue;
+    async function scanNetwork(host, current, depth = 0, maxDepth = 10, visited = new Set()) {
+        if (depth > maxDepth || visited.has(current)) return;
+        visited.add(current);
 
+        try {
+            const scanned = ns.scan(current);
+            const validServers = scanned.filter(server =>
+                server !== host && !EXCLUDE.includes(server)
+            );
+
+            // 批量获取服务器信息
+            const serverData = serverInfo.batchGetServers(validServers);
+
+            for (const server of validServers) {
                 try {
                     const isPurchased = ns.getPurchasedServers().includes(server);
-                    if (!isPurchased && serverInfo.getPortsRequired(server) <= exes.length) {
+                    const serverObj = serverData[server];
+
+                    if (!isPurchased && serverObj.numOpenPortsRequired <= exes.length) {
+                        // 批量执行破解命令
                         HACK_COMMANDS.filter(cmd => exes.includes(cmd)).forEach(cmd => {
                             try {
                                 ns[cmd](server);
@@ -161,14 +254,19 @@ export async function main(ns) {
                         }
                     }
 
-                    if (serverInfo.getMaxMoney(server) > 0 &&
-                        serverInfo.getRequiredHackingLevel(server) <= ns.getHackingLevel() &&
-                        serverInfo.getMinSecurityLevel(server) < 100) {
-                        targets.push([Math.floor(serverInfo.getMaxMoney(server) / serverInfo.getMinSecurityLevel(server)), server]);
+                    // 筛选有效目标服务器
+                    if (serverObj.moneyMax > 0 &&
+                        serverObj.requiredHackingSkill <= ns.getHackingLevel() &&
+                        serverObj.minDifficulty < 100) {
+                        targets.push([
+                            Math.floor(serverObj.moneyMax / serverObj.minDifficulty),
+                            server
+                        ]);
                     }
 
-                    if (serverInfo.getMaxRam(server) > 4 && !EXCLUDE.includes(server)) {
-                        hosts.push([serverInfo.getMaxRam(server), server]);
+                    // 收集可用主机
+                    if (serverObj.maxRam > 4 && !EXCLUDE.includes(server)) {
+                        hosts.push([serverObj.maxRam, server]);
                     }
 
                     servers.push(server);
@@ -177,11 +275,15 @@ export async function main(ns) {
                     } catch (e) {
                         handleError(`文件复制失败: ${e}`);
                     }
-                    await scanNetwork(current, server);
+
+                    // 递归扫描
+                    await scanNetwork(current, server, depth + 1, maxDepth, visited);
                 } catch (e) {
                     handleError(`服务器${server}处理失败: ${e}`);
                 }
             }
+
+            // 排序目标服务器和主机
             targets = sortDesc(targets);
             hosts = sortDesc(hosts);
         } catch (e) {
@@ -202,13 +304,30 @@ export async function main(ns) {
      * 3. 返回两者中较小值
      */
     function calculateHackThreads(target, freeRam, _cores) {
-        const scriptRam = ns.getScriptRam(FILES[2]);
-        const maxThreads = Math.floor(freeRam / scriptRam);
-        const hackPerThread = ns.hackAnalyze(target);
+        // 使用ServerManager缓存脚本RAM
+        const scriptRam = serverInfo._getCachedStat('global', 'hackScriptRam',
+            () => ns.getScriptRam(FILES[2]));
+        if (scriptRam <= 0) return 0;
+
+        // 边界检查
+        if (freeRam <= 0) return 0;
+
+        // 计算最大可能线程数
+        const maxThreads = Math.max(0, Math.floor(freeRam / scriptRam));
+
+        // 缓存hack分析结果
+        const hackPerThread = serverInfo._getCachedStat(target, 'hackPerThread',
+            () => ns.hackAnalyze(target));
         if (hackPerThread <= 0) return 0;
 
+        // 优化百分比计算逻辑
         const desiredPercentage = 0.7;
-        const maxSafeThreads = Math.floor(desiredPercentage / hackPerThread);
+        const maxSafeThreads = Math.min(
+            Math.floor(desiredPercentage / hackPerThread),
+            100 // 添加上限防止无限循环
+        );
+
+        // 返回安全线程数
         return Math.min(maxThreads, maxSafeThreads);
     }
 
@@ -221,25 +340,45 @@ export async function main(ns) {
     }
 
     function calculateGWThreads(target, freeRam, cores) {
-        const growRam = ns.getScriptRam(FILES[0]);
-        const weakenRam = ns.getScriptRam(FILES[1]);
-        let remainingRam = freeRam;
+        // 使用缓存获取脚本RAM
+        const growRam = serverInfo._getCachedStat('global', 'growScriptRam',
+            () => ns.getScriptRam(FILES[0]));
+        const weakenRam = serverInfo._getCachedStat('global', 'weakScriptRam',
+            () => ns.getScriptRam(FILES[1]));
 
+        let remainingRam = freeRam;
         let growThreads = 0;
-        const currentMoney = serverInfo.getMoneyAvailable(target);
-        const maxMoney = serverInfo.getMaxMoney(target);
-        if (currentMoney < maxMoney * 0.8 && currentMoney > 0) {
-            const growFactor = (maxMoney * 0.8) / currentMoney;
-            growThreads = Math.ceil(ns.growthAnalyze(target, growFactor, cores));
-            growThreads = Math.min(growThreads, Math.floor(remainingRam * 0.7 / growRam));
+
+        // 获取并缓存资金和安全性数据
+        const moneyData = {
+            current: serverInfo.getMoneyAvailable(target),
+            max: serverInfo.getMaxMoney(target)
+        };
+        const securityData = {
+            current: serverInfo.getSecurityLevel(target),
+            min: serverInfo.getMinSecurityLevel(target)
+        };
+
+        // 优化资金增长计算
+        if (moneyData.current < moneyData.max * 0.8 && moneyData.current > 0) {
+            const cachedGrowth = serverInfo._getCachedStat(target, 'growthFactor',
+                () => ns.growthAnalyze(target, (moneyData.max * 0.8) / moneyData.current, cores));
+
+            growThreads = Math.min(
+                Math.ceil(cachedGrowth),
+                Math.floor(freeRam * 0.7 / growRam)
+            );
             remainingRam -= growThreads * growRam;
         }
 
+        // 优化安全削弱计算
         let weakenThreads = 0;
-        const securityDiff = serverInfo.getSecurityLevel(target) - serverInfo.getMinSecurityLevel(target);
+        const securityDiff = securityData.current - securityData.min;
         if (securityDiff > 0) {
-            weakenThreads = Math.ceil(securityDiff / (0.05 * cores));
-            weakenThreads = Math.min(weakenThreads, Math.floor(remainingRam / weakenRam));
+            weakenThreads = Math.min(
+                Math.ceil(securityDiff / (0.05 * cores)),
+                Math.floor(remainingRam / weakenRam)
+            );
         }
 
         return [growThreads, weakenThreads];
@@ -296,7 +435,10 @@ export async function main(ns) {
      * 4. 执行相应操作
      */
     const allocateResourcesImproved = withTiming(ns, '资源分配', async function () {
-        for (const [_, host] of hosts) {
+        // 批量获取主机信息
+        const hostData = serverInfo.batchGetServers(hosts.map(h => h[1]));
+
+        for (const [ram, host] of hosts) {
             if (host === 'home') continue;
 
             if (tarIndex >= targets.length) {
@@ -305,13 +447,19 @@ export async function main(ns) {
             }
 
             const target = targets[tarIndex][1];
-            const freeRam = serverInfo.getMaxRam(host) - serverInfo.getUsedRam(host);
-            const server = ns.getServer(host);
-            const cores = server.cpuCores || 1;
+            const hostObj = hostData[host];
+            const freeRam = hostObj.maxRam - hostObj.ramUsed;
+            const cores = hostObj.cpuCores || 1;
 
-            if (serverInfo.getMoneyAvailable(target) < serverInfo.getMaxMoney(target) * 0.8) {
+            // 获取目标服务器状态
+            const targetMoney = serverInfo.getMoneyAvailable(target);
+            const maxMoney = serverInfo.getMaxMoney(target);
+            const securityLevel = serverInfo.getSecurityLevel(target);
+            const minSecurity = serverInfo.getMinSecurityLevel(target);
+
+            if (targetMoney < maxMoney * 0.8) {
                 hType = 0;
-            } else if (serverInfo.getSecurityLevel(target) > serverInfo.getMinSecurityLevel(target) + 5 || loop) {
+            } else if (securityLevel > minSecurity + 5 || loop) {
                 hType = 1;
                 const weakenThreads = calculateWeakenThreads(target, freeRam, cores);
                 if (weakenThreads > 0 && hasEnoughResources(host, FILES[1], weakenThreads)) {
@@ -345,12 +493,14 @@ export async function main(ns) {
     });
 
     // 主循环控制变量
-    let cycles = 0; // 循环计数器，用于定期清理缓存
+    let cycles = 0; // 循环计数器
+    let lastTargetCount = 0;
+    let sleepTime = 100; // 初始sleep时间
 
     /**
      * 主执行循环
      * 每轮循环执行:
-     * 1. 定期清理缓存(每10次循环)
+     * 1. 定期清理缓存(每20次循环)
      * 2. 更新可执行工具列表
      * 3. 扫描网络并收集目标
      * 4. 分配资源进行攻击
@@ -358,33 +508,42 @@ export async function main(ns) {
      * 6. 错误处理和恢复
      */
     while (true) {
-        if (cycles++ % 10 === 0) {
+        // 减少缓存清理频率
+        if (cycles++ % 20 === 0) {
             serverInfo.clearCache();
         }
 
-        servers = [];
+        // 只重置必要的变量
         targets = [];
         hosts = [[Math.max(serverInfo.getMaxRam('home') - 50, 0), 'home']];
-        exes = [];
         tarIndex = 0;
         loop = false;
-        act = {};
 
-        EXCLUDE = [...Array.from(
-            { length: ns.hacknet.numNodes() },
-            (_, i) => ns.hacknet.getNodeStats(i).name
-        )];
+        // 缓存排除列表
+        if (cycles === 1) {
+            EXCLUDE = [...Array.from(
+                { length: ns.hacknet.numNodes() },
+                (_, i) => ns.hacknet.getNodeStats(i).name
+            )];
+        }
 
         try {
             await updateExes();
             await scanNetwork('', 'home');
             await allocateResourcesImproved();
             generateLog();
+
+            // 动态调整sleep时间
+            if (targets.length !== lastTargetCount) {
+                sleepTime = Math.max(50, Math.min(500, 200 - targets.length * 2));
+                lastTargetCount = targets.length;
+            }
         } catch (e) {
             handleError(`主循环错误: ${e}`);
-            await ns.sleep(5000);
+            sleepTime = 5000; // 错误时延长等待
         }
+
         ns.ui.resizeTail(570, Math.min((targets.length * 24) + 180, 20 * 24 + 180));
-        await ns.sleep(100);
+        await ns.sleep(sleepTime);
     }
 }
