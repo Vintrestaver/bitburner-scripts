@@ -2,10 +2,29 @@
 export async function main(ns) {
     ns.atExit(() => ns.ui.closeTail());
     ns.disableLog('ALL');
-    ns.ui.setTailTitle(`AutoHack v2.8 [${ns.getScriptName()}]`);
+    ns.ui.setTailTitle(`AutoHack v3.0 [${ns.getScriptName()}]`);
     ns.ui.openTail();
     const [W, H] = ns.ui.windowSize();
     ns.ui.moveTail(W * 0.6, H * 0);
+
+    // ANSI 颜色配置 (Bitburner支持)
+    const COLORS = {
+        reset: '\x1b[0m',       // 重置颜色
+        border: '\x1b[38;5;240m', // 灰色边框
+        header: '\x1b[33m',     // 黄色表头
+        progress: '\x1b[36m',   // 青色进度条
+        progressBg: '\x1b[38;5;240m', // 灰色背景
+        funds: '\x1b[32m',      // 绿色资金
+        security: '\x1b[38;5;208m', // 橙色安全
+        securityBg: '\x1b[38;5;240m', // 灰色背景
+        success: '\x1b[32m',    // 绿色成功
+        warning: '\x1b[33m',    // 黄色警告
+        danger: '\x1b[31m',     // 红色危险
+        info: '\x1b[35m',       // 蓝色信息
+        exeReady: '\x1b[32m',   // 绿色已安装
+        exeMissing: '\x1b[31m'  // 红色未安装
+    };
+
     // 脚本文件配置
     const FILES = ['grow.script', 'weak.script', 'hack.script']; // 三种操作脚本
     let EXCLUDE = []; // 排除的服务器列表
@@ -181,12 +200,19 @@ export async function main(ns) {
             const ratio = currentMoney / maxMoney || 0;
 
             const filled = Math.floor(ratio * 10);
-            const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+            const progressBar =
+                COLORS.progress + '█'.repeat(filled) +
+                COLORS.progressBg + '░'.repeat(10 - filled) +
+                COLORS.reset;
 
-            const funds = `$${ns.formatNumber(currentMoney, 1).padEnd(6)}` || '_'.repeat(6);
+            const funds = COLORS.funds + '$' + ns.formatNumber(currentMoney, 1).padEnd(6) + COLORS.reset || '_'.repeat(6);
+
             const sec = 1 - serverInfo.getMinSecurityLevel(t[1]) / serverInfo.getSecurityLevel(t[1]) || 0;
             const filled1 = Math.floor(sec * 8);
-            const progressBar1 = '■'.repeat(filled1) + '□'.repeat(8 - filled1);
+            const progressBar1 =
+                COLORS.security + '■'.repeat(filled1) +
+                COLORS.securityBg + '□'.repeat(8 - filled1) +
+                COLORS.reset;
 
             ns.print(`║ ${(act[t[1]] || ' ').padEnd(BORDER_TEMPLATES.colWidths.cycle - 2)} ║ ${truncate(t[1]).padEnd(BORDER_TEMPLATES.colWidths.target - 2)} ║ ${progressBar1.padEnd(BORDER_TEMPLATES.colWidths.security - 2)} ║ ${progressBar} ${funds.padEnd(BORDER_TEMPLATES.colWidths.progress - 13)} ║`);
         });
@@ -195,17 +221,19 @@ export async function main(ns) {
         ns.print(`╠${'═'.repeat(BORDER_TEMPLATES.colWidths.cycle)}╩${'═'.repeat(BORDER_TEMPLATES.colWidths.target)}╩${'═'.repeat(BORDER_TEMPLATES.colWidths.security)}╩${'═'.repeat(BORDER_TEMPLATES.colWidths.progress)}╣`);
 
         const exeStatus = HACK_COMMANDS.map(cmd =>
-            exes.includes(cmd) ? '■' : '□'
+            (exes.includes(cmd) ? COLORS.exeReady : COLORS.exeMissing) +
+            (exes.includes(cmd) ? '■' : '□') +
+            COLORS.reset
         ).join('');
 
         const hostStats = [
-            `HN:${ns.hacknet.numNodes()}`,
-            `SV:${ns.getPurchasedServers().length}`,
-            `UP:${hosts.filter(h => h[1] !== 'home').length}`,
-            `TG:${targets.length}`
-        ].join('  ');
+            COLORS.info + 'HN:' + ns.hacknet.numNodes() + COLORS.reset,
+            COLORS.info + 'SV:' + ns.getPurchasedServers().length + COLORS.reset,
+            COLORS.info + 'UP:' + hosts.filter(h => h[1] !== 'home').length + COLORS.reset,
+            COLORS.info + 'TG:' + targets.length + COLORS.reset
+        ].join(' | ');
 
-        ns.print(`║ EXE:${exeStatus} ${hostStats.padEnd(BORDER_TEMPLATES.colWidths.cycle + BORDER_TEMPLATES.colWidths.target + BORDER_TEMPLATES.colWidths.security + BORDER_TEMPLATES.colWidths.progress - 8)}║`);
+        ns.print(`║ EXE:${exeStatus} ${hostStats.padEnd(BORDER_TEMPLATES.colWidths.cycle + BORDER_TEMPLATES.colWidths.target + BORDER_TEMPLATES.colWidths.security + BORDER_TEMPLATES.colWidths.progress + 28)}║`);
         ns.print(`╚${'═'.repeat(BORDER_TEMPLATES.colWidths.cycle + BORDER_TEMPLATES.colWidths.target + BORDER_TEMPLATES.colWidths.security + BORDER_TEMPLATES.colWidths.progress + 3)}╝`);
     }
 
@@ -487,7 +515,11 @@ export async function main(ns) {
                 }
             }
 
-            if (!loop) act[target] = ['G', 'W', 'H'][hType];
+            if (!loop) act[target] = [
+                `${COLORS.success}G${COLORS.reset}`,
+                `${COLORS.warning}W${COLORS.reset}`,
+                `${COLORS.info}H${COLORS.reset}`
+            ][hType];
             tarIndex++;
         }
     });
