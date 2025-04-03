@@ -78,17 +78,14 @@ export async function main(ns) {
     // ========================
 
     async function handleDeleteFiles(ns) {
-        const folderInput = await ns.prompt('请输入要删除的文件夹路径（例如输入"foo"对应/foo/）:', {
-            type: "text"
-        });
-
-        if (folderInput === null || folderInput.trim() === "") {
+        const scriptDirs = getScriptDirectories(ns);
+        const selectedDir = await selectDirectory(ns, scriptDirs);
+        if (!selectedDir) {
             ns.toast("操作已取消", "warning", 2000);
             return;
         }
 
-        let folderPath = normalizePath(folderInput.trim());
-        if (folderPath === '//') folderPath = '/';
+        let folderPath = normalizePath(selectedDir);
 
         // 安全检查：根目录删除需要额外确认
         if (folderPath === '/') {
