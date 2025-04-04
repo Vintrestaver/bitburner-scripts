@@ -54,7 +54,7 @@ export async function main(ns) {
 		const playerMoney = ns.getPlayer().money;
 		const shouldBuyLong = forecast >= stockBuyOver_Long && volatilityPercent <= stockVolatility;
 
-		// Look for Long Stocks to buy
+		// 寻找多头股票买入机会
 		if (shouldBuyLong) {
 			if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minSharePercent, "Long")) {
 				let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxShares);
@@ -63,36 +63,36 @@ export async function main(ns) {
 				if (shares >= minSharesToBuy) boughtFor = ns.stock.buyStock(stock, shares);
 
 				if (boughtFor > 0) {
-					const message = 'Bought ' + Math.round(shares) + ' Long shares of ' + stock + ' for ' + lib.formatReallyBigNumber(ns, boughtFor);
+					const message = '买入 ' + Math.round(shares) + ' 股 ' + stock + ' 多头, 花费 ' + lib.formatReallyBigNumber(ns, boughtFor);
 					const company = companyMeta.find(company => company.stockSymbol === stock);
 
 					ns.toast(message, 'success', toastDuration);
 
-					// Check for company and server
+					// 检查公司和服务器关联
 					if (company && company.serverName.length > 0) {
-						// Check if company has a server
+						// 检查公司是否有服务器
 						if (company.serverName != 'NoServer') {
 							if (ns.hasRootAccess(company.serverName)) {
 								const { canRun, threads } = calculateGrowThreads(ns, company.serverName);
 								if (canRun) {
 									ns.run(growScript, threads, company.serverName);
 								} else {
-									ns.tprint("WARNING- Not enough RAM available on home to execute grow() for " + company.serverName);
+									ns.tprint("警告- home服务器没有足够内存执行grow()脚本: " + company.serverName);
 								}
 							}
 							else {
-								//ns.tprint("WARNING- No root access for: " + company.serverName);
+								//ns.tprint("警告- 没有root权限: " + company.serverName);
 							}
 						}
 					}
 					else {
-						ns.tprint("WARNING- No server defined for: " + stock);
+						ns.tprint("警告- 未定义服务器: " + stock);
 					}
 				}
 			}
 
 
-			// Look for Short Stocks to buy
+			// 寻找空头股票买入机会
 			if (shortUnlock) {
 				const shouldBuyShort = forecast <= stockBuyUnder_Short && volatilityPercent <= stockVolatility;
 				if (shouldBuyShort) {
@@ -101,7 +101,7 @@ export async function main(ns) {
 						let boughtFor = ns.stock.buyShort(stock, shares);
 
 						if (boughtFor > 0) {
-							let message = 'Bought ' + Math.round(shares) + ' Short shares of ' + stock + ' for ' + lib.formatReallyBigNumber(ns, boughtFor);
+							let message = '买入 ' + Math.round(shares) + ' 股 ' + stock + ' 空头, 花费 ' + lib.formatReallyBigNumber(ns, boughtFor);
 
 							ns.toast(message, 'success', toastDuration);
 						}
@@ -213,14 +213,14 @@ export async function main(ns) {
 		let profit = 0;    // 总利润
 
 		// 计算多头持仓价值
-		if (position[0] > 0) { 
+		if (position[0] > 0) {
 			const longProfit = position[0] * (bidPrice - position[1]) - (2 * 100000);
 			value += position[0] * position[1] + longProfit;
 			profit += longProfit;
 		}
 
 		// 计算空头持仓价值
-		if (position[2] > 0) { 
+		if (position[2] > 0) {
 			const shortProfit = position[2] * Math.abs(bidPrice - position[3]) - (2 * 100000);
 			value += position[2] * position[3] + shortProfit;
 			profit += shortProfit;
