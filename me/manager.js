@@ -1,17 +1,28 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    ns.disableLog('ALL'); // 禁用所有默认日志
-    ns.tail(); // 打开独立窗口
-    ns.atExit(() => ns.closeTail());
+    // 初始化日志设置
+    ns.disableLog('ALL');
+    ns.ui.openTail();
+    
+    // 退出时关闭所有脚本和窗口
+    ns.atExit(() => {
+        ns.ui.closeTail();
+        // 关闭所有管理的脚本
+        [SCRIPT1, SCRIPT2, SCRIPT3].forEach(script => {
+            if (ns.isRunning(script, HOST)) {
+                ns.scriptKill(script, HOST);
+            }
+        });
+    });
 
     // 常量定义
-    const SCRIPT1 = 'me/stock.js';
-    const SCRIPT2 = 'me/autohack.js';
-    const SCRIPT3 = 'me/HNPSmanager.js';
-    const MONITOR_INTERVAL = 1000;
-    const HOST = ns.getHostname();
+    const SCRIPT1 = 'me/stock.js';     // 股票交易脚本路径
+    const SCRIPT2 = 'me/autohack.js';  // 自动黑客脚本路径
+    const SCRIPT3 = 'me/HNPSmanager.js'; // Hacknet节点管理脚本路径
+    const MONITOR_INTERVAL = 1000;     // 监控刷新间隔（毫秒）
+    const HOST = ns.getHostname();     // 当前主机名
 
-    // ANSI 颜色代码
+    // ANSI 颜色代码配置
     const COLORS = {
         reset: "\u001b[0m",
         red: "\u001b[31m",
@@ -23,17 +34,17 @@ export async function main(ns) {
         bgRed: "\u001b[41m"
     };
 
-    // 状态缓存
+    // 全局状态缓存对象
     let dashboardData = {
-        lastUpdate: 0,
-        hackingLevel: 0,
-        money: 0,
-        hnpsNodes: 0,
-        errors: [],
-        scripts: {
-            autohack: { running: false, memUsage: 0 },
-            stock: { running: false, profit: 0 },
-            hnps: { running: false, cost: 0 }
+        lastUpdate: 0,       // 最后更新时间戳
+        hackingLevel: 0,     // 当前黑客等级
+        money: 0,            // 当前资金总额
+        hnpsNodes: 0,        // Hacknet节点数量
+        errors: [],          // 错误日志队列
+        scripts: {           // 子脚本状态
+            autohack: { running: false, memUsage: 0 },  // 自动黑客状态
+            stock: { running: false, profit: 0 },       // 股票交易状态
+            hnps: { running: false, cost: 0 }           // HNPS管理状态
         }
     };
 
@@ -41,7 +52,11 @@ export async function main(ns) {
     // 核心功能函数
     //=======================
 
-    // 检查脚本是否存在
+    /**
+     * 检查脚本是否存在
+     * @param {string} script 脚本路径
+     * @returns {boolean} 是否存在
+     */
     const scriptExists = (script) => {
         try {
             return ns.fileExists(script, HOST);
@@ -51,7 +66,11 @@ export async function main(ns) {
         }
     };
 
-    // 检查脚本运行状态
+    /**
+     * 检查脚本运行状态
+     * @param {string} script 脚本路径
+     * @returns {boolean} 是否正在运行
+     */
     const isScriptRunning = (script) => {
         try {
             return ns.isRunning(script, HOST);
@@ -61,7 +80,12 @@ export async function main(ns) {
         }
     };
 
-    // 安全启动脚本
+    /**
+     * 安全启动脚本（带错误处理）
+     * @param {string} script 脚本路径 
+     * @param {number} [threads=1] 线程数
+     * @returns {Promise<boolean>} 是否启动成功
+     */
     const safeRun = async (script, threads = 1) => {
         try {
             if (!scriptExists(script)) {
@@ -83,32 +107,38 @@ export async function main(ns) {
     // HNPS决策逻辑
     const shouldRunHNPS = () => {
         try {
+            // 获取当前资金总额
             const money = ns.getPlayer().money;
 
-            // 检查购买新节点
+            // 检查购买新节点条件：
+            // 1. 当前节点数小于最大节点数
+            // 2. 节点成本小于资金的10%
             if (ns.hacknet.numNodes() < ns.hacknet.maxNumNodes()) {
                 const nodeCost = ns.hacknet.getPurchaseNodeCost();
                 if (nodeCost < money * 0.1) return true;
             }
 
-            // 检查节点升级
+            // 遍历所有现有节点检查升级条件
             for (let i = 0; i < ns.hacknet.numNodes(); i++) {
                 try {
+                    // 计算三种升级方式的成本：
+                    // 1. 等级升级 2. RAM升级 3. 核心升级
                     const costs = [
                         ns.hacknet.getLevelUpgradeCost(i, 1),
                         ns.hacknet.getRamUpgradeCost(i, 1),
                         ns.hacknet.getCoreUpgradeCost(i, 1)
                     ];
+                    // 任意一种升级成本小于资金的5%则返回true
                     if (costs.some(c => c < money * 0.05)) return true;
                 } catch (e) {
                     recordError(`节点 ${i} 升级检查失败`, e);
-                    continue;
+                    continue; // 单个节点检查失败不影响其他节点
                 }
             }
-            return false;
+            return false; // 所有条件都不满足
         } catch (e) {
             recordError('HNPS决策函数失败', e);
-            return false;
+            return false; // 出错时保守返回false
         }
     };
 
@@ -116,40 +146,41 @@ export async function main(ns) {
     // 仪表盘功能
     //=======================
 
-    // 记录错误
+    // 记录错误到缓存队列
     const recordError = (msg, error = null) => {
         const entry = {
-            time: new Date().toLocaleTimeString(),
-            message: msg,
-            detail: error ? error.toString() : ''
+            time: new Date().toLocaleTimeString(), // 错误发生时间
+            message: msg,                         // 错误描述
+            detail: error ? error.toString() : '' // 错误详情
         };
-        dashboardData.errors.unshift(entry); // 添加到开头
+        dashboardData.errors.unshift(entry); // 新错误添加到队列开头
         if (dashboardData.errors.length > 5) {
-            dashboardData.errors.pop(); // 保持最多5条错误
+            dashboardData.errors.pop(); // 保持最多5条错误记录
         }
     };
 
-    // 更新仪表盘数据
+    // 更新仪表盘数据（限流：每秒最多一次）
     const updateDashboardData = async () => {
         try {
             const now = Date.now();
-            if (now - dashboardData.lastUpdate < 1000) return;
+            if (now - dashboardData.lastUpdate < 1000) return; // 限流检查
 
+            // 基础数据更新
             dashboardData.hackingLevel = ns.getHackingLevel();
             dashboardData.money = ns.getPlayer().money;
             dashboardData.hnpsNodes = ns.hacknet.numNodes();
 
-            // 脚本状态检查
+            // 检查各脚本运行状态
             dashboardData.scripts.autohack.running = isScriptRunning(SCRIPT2);
             dashboardData.scripts.stock.running = isScriptRunning(SCRIPT1);
             dashboardData.scripts.hnps.running = isScriptRunning(SCRIPT3);
 
-            // 内存用量检查
+            // 只有运行中的脚本才更新内存用量
             if (dashboardData.scripts.autohack.running) {
                 dashboardData.scripts.autohack.memUsage = ns.getScriptRam(SCRIPT2);
             }
 
-            dashboardData.lastUpdate = now;
+            dashboardData.lastUpdate = now; // 记录本次更新时间
         } catch (e) {
             recordError('仪表盘数据更新失败', e);
         }
@@ -158,7 +189,7 @@ export async function main(ns) {
     // 绘制仪表盘
     const renderDashboard = () => {
         try {
-            const { green, red, yellow, cyan, blue, bgBlue, reset } = COLORS;
+            const { green, red, yellow, cyan, bgBlue, reset } = COLORS;
             let output = `${bgBlue}=== 系统监控面板 ===${reset}\n`;
 
             // 基础信息
@@ -212,7 +243,11 @@ export async function main(ns) {
     // 主控制逻辑
     //=======================
 
-    // 自动黑客管理
+    /**
+     * 自动黑客管理策略
+     * - 黑客等级低于8000时保持运行
+     * - 达标后自动停止脚本
+     */
     const manageAutohack = async () => {
         try {
             const shouldRun = ns.getHackingLevel() < 8000;
@@ -230,7 +265,11 @@ export async function main(ns) {
         }
     };
 
-    // 股票脚本管理
+    /**
+     * 股票脚本管理策略
+     * - 仅在拥有4S数据API时启动
+     * - 只管理启动不处理停止
+     */
     const manageStock = async () => {
         try {
             let hasTIX = false;
@@ -273,21 +312,25 @@ export async function main(ns) {
     //=======================
     while (true) {
         try {
-            // 更新数据
+            // 更新监控数据（每秒限制）
             await updateDashboardData();
 
-            // 执行管理逻辑
-            await manageAutohack();
-            await manageStock();
-            await manageHNPS();
+            // 并行执行管理策略
+            await Promise.all([
+                manageAutohack(),
+                manageStock(),
+                manageHNPS()
+            ]);
 
-            // 渲染界面
+            // 渲染控制台界面
             renderDashboard();
 
+            // 等待下一个监控周期
             await ns.sleep(MONITOR_INTERVAL);
         } catch (e) {
+            // 主循环崩溃保护
             recordError('主循环崩溃', e);
-            await ns.sleep(5000); // 防止错误循环
+            await ns.sleep(5000); 
         }
     }
 }
