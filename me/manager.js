@@ -2,9 +2,7 @@
 export async function main(ns) {
     // 初始化设置
     ns.disableLog('ALL');
-    ns.ui.clearTerminal();
     const WINDOW_SIZE = { width: 100, height: 40 };
-    ns.ui.setTheme('dark');
     ns.ui.resizeTail(WINDOW_SIZE.width, WINDOW_SIZE.height);
     ns.ui.openTail();
 
