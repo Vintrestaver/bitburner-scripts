@@ -30,10 +30,6 @@ export async function main(ns) {
                 path: 'me/stock.js',
                 minFunds: 1e9
             },
-            hnps: {
-                path: 'me/HNPSmanager.js',
-                minROI: 1.2
-            }
         },
         HASH_VALUE: 1e6 / 4,  // 4哈希 = 1百万
         ERROR: {
@@ -101,8 +97,7 @@ export async function main(ns) {
             const hostname = ns.getHostname();
             const scriptsToKill = [
                 CONFIG.SCRIPTS.autohack.path,
-                CONFIG.SCRIPTS.stock.path,
-                CONFIG.SCRIPTS.hnps.path
+                CONFIG.SCRIPTS.stock.path
             ];
 
             scriptsToKill.forEach(script => {
@@ -134,24 +129,13 @@ export async function main(ns) {
             incomeRate: 0,
             incomeSamples: []
         },
-        hnps: {
-            nodes: 0,
-            production: 0,
-            investment: 0,
-            rate: 0,
-            roi: 0,
-            breakeven: 0,
-            nextUpgradeCost: Infinity,
-            upgradeType: "none"
-        },
         stock: {
             hasAccess: false,
             has4SData: false
         },
         scripts: {
             autohack: { running: false, ramUsage: 0, threads: 0, retries: 0, lastError: null },
-            stock: { running: false, retries: 0, lastError: null },
-            hnps: { running: false, retries: 0, lastError: null }
+            stock: { running: false, retries: 0, lastError: null }
         },
         performance: {
             cycleTime: 0,
@@ -241,17 +225,14 @@ export async function main(ns) {
             // 2. 重置关键状态
             state.scripts.autohack.running = false;
             state.scripts.stock.running = false;
-            state.scripts.hnps.running = false;
 
             // 3. 重新初始化数据收集
             await updatePlayerData(true);
-            await updateHnpsData(true);
             await updateStockData(true);
 
             // 4. 重置错误计数器
             state.scripts.autohack.retries = 0;
             state.scripts.stock.retries = 0;
-            state.scripts.hnps.retries = 0;
 
             state.system.healthy = true;
             state.system.degraded = false;
@@ -294,66 +275,6 @@ export async function main(ns) {
         }
     };
 
-    const updateHnpsData = async (force = false) => {
-        if (!state.system.healthy && !force) return false;
-
-        try {
-            if (!ns.fileExists("hacknetnodes.exe")) {
-                state.hnps.nodes = 0;
-                return true;
-            }
-
-            const nodes = ns.hacknet.numNodes() || 0;
-            let production = 0;
-            let currentRate = 0;
-            let investment = 0;
-            let nextUpgradeCost = Infinity;
-            let upgradeType = "none";
-
-            for (let i = 0; i < nodes; i++) {
-                try {
-                    const stats = ns.hacknet.getNodeStats(i);
-                    production += (stats.totalProduction || 0) * CONFIG.HASH_VALUE;
-                    currentRate += (stats.production || 0) * CONFIG.HASH_VALUE;
-
-                    // 节点成本
-                    investment += ns.hacknet.getPurchaseNodeCost(i) || 0;
-
-                    // 升级成本
-                    const levelCost = ns.hacknet.getLevelUpgradeCost(i, 1) || Infinity;
-                    const ramCost = ns.hacknet.getRamUpgradeCost(i, 1) || Infinity;
-                    const coreCost = ns.hacknet.getCoreUpgradeCost(i, 1) || Infinity;
-
-                    // 找出最便宜升级
-                    const minCost = Math.min(levelCost, ramCost, coreCost);
-                    if (minCost < nextUpgradeCost) {
-                        nextUpgradeCost = minCost;
-                        if (minCost === levelCost) upgradeType = "level";
-                        else if (minCost === ramCost) upgradeType = "ram";
-                        else upgradeType = "core";
-                    }
-                } catch (e) {
-                    recordError(`更新HNPS节点${i}数据失败`, e, ErrorType.WARNING);
-                    continue; // 继续处理其他节点
-                }
-            }
-
-            state.hnps = {
-                nodes,
-                production,
-                investment,
-                rate: currentRate,
-                roi: production / Math.max(1, investment),
-                breakeven: currentRate > 0 ? (investment - production) / currentRate : Infinity,
-                nextUpgradeCost,
-                upgradeType
-            };
-            return true;
-        } catch (e) {
-            recordError("更新HNPS数据失败", e, ErrorType.FUNCTIONAL);
-            return false;
-        }
-    };
 
     const updateStockData = async (force = false) => {
         if (!state.system.healthy && !force) return false;
@@ -448,35 +369,6 @@ export async function main(ns) {
                 }
             }
 
-            // 管理HNPS脚本
-            const shouldRunHnps = (state.hnps.roi || 0) > CONFIG.SCRIPTS.hnps.minROI;
-            if (shouldRunHnps !== state.scripts.hnps.running) {
-                try {
-                    if (shouldRunHnps) {
-                        const pid = await ns.run(CONFIG.SCRIPTS.hnps.path);
-                        state.scripts.hnps.running = pid !== 0;
-                        if (state.scripts.hnps.running) {
-                            state.scripts.hnps.retries = 0;
-                            state.scripts.hnps.lastError = null;
-                        } else {
-                            throw new Error("无法启动HNPS脚本");
-                        }
-                    } else {
-                        ns.scriptKill(CONFIG.SCRIPTS.hnps.path, ns.getHostname());
-                        state.scripts.hnps.running = false;
-                    }
-                } catch (e) {
-                    state.scripts.hnps.retries++;
-                    state.scripts.hnps.lastError = e;
-
-                    if (state.scripts.hnps.retries >= CONFIG.ERROR.MAX_RETRIES) {
-                        recordError("HNPS脚本管理失败，达到最大重试次数", e, ErrorType.FUNCTIONAL);
-                    } else {
-                        recordError(`HNPS脚本管理失败，将重试(${state.scripts.hnps.retries}/${CONFIG.ERROR.MAX_RETRIES})`, e, ErrorType.TRANSIENT);
-                    }
-                }
-            }
-
             return true;
         } catch (e) {
             recordError("脚本管理失败", e, ErrorType.CRITICAL);
@@ -504,15 +396,7 @@ export async function main(ns) {
             output.push(`等级: ${format.number(state.player.hacking)} ${format.progress(state.player.hacking, CONFIG.SCRIPTS.autohack.minHackingLevel)}`);
             output.push(`资金: ${format.money(state.player.money)} (${format.money(state.player.incomeRate)}/s)`);
 
-            // 3. HNPS状态
-            const roiColor = (state.hnps.roi || 0) > 1.5 ? c.success :
-                (state.hnps.roi || 0) > 1.2 ? c.warning : c.danger;
-            output.push(`\n${c.primary}◆ HNPS网络${c.reset}`);
-            output.push(`节点: ${format.number(state.hnps.nodes)} | 收益: ${format.money(state.hnps.rate)}/s`);
-            output.push(`投资: ${format.money(state.hnps.investment)} | 回报: ${roiColor}${format.number(state.hnps.roi)}x${c.reset}`);
-            output.push(`回本: ${format.time(state.hnps.breakeven)} | 升级: ${state.hnps.upgradeType} (${format.money(state.hnps.nextUpgradeCost)})`);
-
-            // 4. 股票状态 (简化显示)
+            // 3. 股票状态 (简化显示)
             output.push(`\n${c.primary}◆ 股票市场${c.reset}`);
             output.push(`访问权限: ${state.stock.hasAccess ? c.success + "已获得" : c.danger + "未获得"}`);
             output.push(`4S数据: ${state.stock.has4SData ? c.success + "已解锁" : c.warning + "未解锁"}`);
@@ -529,8 +413,6 @@ export async function main(ns) {
                 state.stock.hasAccess && state.stock.has4SData ? scriptStatus(false, c.warning, "待机", state.scripts.stock.retries) :
                     scriptStatus(false, c.danger, "无访问", state.scripts.stock.retries)}`);
 
-            output.push(`HNPS管理: ${scriptStatus(state.scripts.hnps.running,
-                (state.hnps.roi || 0) > 1.2 ? c.success : c.warning, "运行中", state.scripts.hnps.retries)}`);
 
             // 6. 错误信息 (显示更详细的错误信息)
             if (state.errors.length > 0) {
@@ -579,7 +461,6 @@ export async function main(ns) {
     // 初始健康检查
     try {
         await updatePlayerData(true);
-        await updateHnpsData(true);
         await updateStockData(true);
     } catch (e) {
         recordError("初始健康检查失败", e, ErrorType.CRITICAL);
@@ -603,11 +484,10 @@ export async function main(ns) {
 
             // 数据更新
             const playerUpdated = await updatePlayerData();
-            const hnpsUpdated = await updateHnpsData();
             const stockUpdated = await updateStockData();
 
             // 如果关键数据更新失败，标记系统为降级
-            if (!playerUpdated || !hnpsUpdated) {
+            if (!playerUpdated) {
                 state.system.degraded = true;
             }
 
@@ -632,7 +512,7 @@ export async function main(ns) {
             }
 
             // 如果系统降级但关键功能仍工作，尝试自动恢复
-            if (state.system.degraded && playerUpdated && hnpsUpdated &&
+            if (state.system.degraded && playerUpdated &&
                 Date.now() - state.system.lastRecovery > 60000) {
                 await attemptRecovery();
             }
