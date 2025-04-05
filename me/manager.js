@@ -1,359 +1,661 @@
 /** @param {NS} ns */
 export async function main(ns) {
-    // 初始化设置
-    ns.disableLog('ALL');
-    const WINDOW_SIZE = { width: 100, height: 40 };
-    ns.ui.resizeTail(WINDOW_SIZE.width, WINDOW_SIZE.height);
-    ns.ui.openTail();
-
-    // 退出处理
-    ns.atExit(() => {
-        ns.ui.closeTail();
-        [SCRIPT1, SCRIPT2, SCRIPT3].forEach(script => {
-            if (ns.isRunning(script, HOST)) ns.scriptKill(script, HOST);
-        });
-    });
-
-    // 常量定义
-    const SCRIPT1 = 'me/stock.js';
-    const SCRIPT2 = 'me/autohack.js';
-    const SCRIPT3 = 'me/HNPSmanager.js';
-    const MONITOR_INTERVAL = 1000;
-    const HOST = ns.getHostname();
-    const HASH_TO_CASH_RATIO = 4; // 4哈希 = $1e6
-
-    // 颜色配置
-    const COLORS = {
-        reset: "\u001b[0m",
-        red: "\u001b[31m",
-        green: "\u001b[32m",
-        yellow: "\u001b[33m",
-        blue: "\u001b[34m",
-        cyan: "\u001b[36m",
-        white: "\u001b[37m",
-        bgBlue: "\u001b[44m",
-        bgRed: "\u001b[41m",
-        bgGreen: "\u001b[42m",
-        bgYellow: "\u001b[43m"
+    // ======================
+    // 配置系统 (使用Bitburner支持的ANSI颜色)
+    // ======================
+    const CONFIG = {
+        UI: {
+            width: 500,
+            height: 700,
+            refreshRate: 1000,
+            theme: {
+                primary: "\u001b[34m",      // 蓝色
+                secondary: "\u001b[36m",    // 青色
+                success: "\u001b[32m",      // 绿色
+                warning: "\u001b[33m",      // 黄色
+                danger: "\u001b[31m",       // 红色
+                reset: "\u001b[0m",         // 重置
+                bgPrimary: "\u001b[44m",    // 蓝色背景
+                bgWarning: "\u001b[43m",    // 黄色背景
+                bgDanger: "\u001b[41m"      // 红色背景
+            }
+        },
+        SCRIPTS: {
+            autohack: { 
+                path: 'me/autohack.js', 
+                minHackingLevel: 8000,
+                ram: 1.7 
+            },
+            stock: { 
+                path: 'me/stock.js',
+                minFunds: 1e9 
+            },
+            hnps: { 
+                path: 'me/HNPSmanager.js',
+                minROI: 1.2 
+            }
+        },
+        HASH_VALUE: 1e6 / 4,  // 4哈希 = 1百万
+        ERROR: {
+            MAX_RETRIES: 3,    // 最大重试次数
+            COOLDOWN: 5000     // 错误冷却时间(ms)
+        }
     };
 
-    // 状态数据
-    let dashboardData = {
-        lastUpdate: 0,
-        hackingLevel: 0,
-        money: 0,
-        hnpsStats: {
-            nodes: 0,
-            totalProduction: 0, // 以美元计算
-            totalSpent: 0,
-            roi: 0,
-            breakEvenTime: 0,
-            currentRate: 0 // 美元/秒
+    // 错误类型枚举
+    const ErrorType = {
+        CRITICAL: 0,    // 需要立即停止脚本
+        FUNCTIONAL: 1,  // 功能部分失效
+        TRANSIENT: 2,   // 临时性错误
+        WARNING: 3      // 不影响主要功能
+    };
+
+    // ======================
+    // 工具函数 (增强防御性检查)
+    // ======================
+    const format = {
+        money: amount => {
+            if (amount === undefined || amount === null || isNaN(amount)) {
+                return `${CONFIG.UI.theme.danger}N/A${CONFIG.UI.theme.reset}`;
+            }
+            const isNegative = amount < 0;
+            const absAmount = Math.abs(amount);
+            let formatted;
+            
+            if (absAmount >= 1e12) formatted = `$${ns.formatNumber(absAmount/1e12, 2)}t`;
+            else if (absAmount >= 1e9) formatted = `$${ns.formatNumber(absAmount/1e9, 2)}b`;
+            else if (absAmount >= 1e6) formatted = `$${ns.formatNumber(absAmount/1e6, 2)}m`;
+            else formatted = `$${ns.formatNumber(absAmount, 2)}`;
+            
+            return isNegative ? 
+                `${CONFIG.UI.theme.danger}-${formatted}${CONFIG.UI.theme.reset}` : 
+                `${CONFIG.UI.theme.success}${formatted}${CONFIG.UI.theme.reset}`;
         },
-        errors: [],
+        number: num => {
+            if (num === undefined || num === null || isNaN(num)) {
+                return `${CONFIG.UI.theme.danger}N/A${CONFIG.UI.theme.reset}`;
+            }
+            return ns.formatNumber(num, 2);
+        },
+        time: seconds => {
+            if (seconds === undefined || seconds === null || isNaN(seconds)) return "N/A";
+            if (seconds === Infinity) return "∞";
+            const days = Math.floor(seconds/86400);
+            const hours = Math.floor((seconds%86400)/3600);
+            const mins = Math.floor((seconds%3600)/60);
+            return `${days>0?days+"d ":""}${hours>0?hours+"h ":""}${mins}m`;
+        },
+        progress: (value, max, width=20) => {
+            if (value === undefined || max === undefined || isNaN(value) || isNaN(max)) {
+                return `[${' '.repeat(width)}]`;
+            }
+            const ratio = Math.min(1, Math.max(0, value/max));
+            return `[${'█'.repeat(Math.floor(ratio*width))}${' '.repeat(width-Math.floor(ratio*width))}]`;
+        }
+    };
+
+    // 注册脚本退出时的清理函数
+    const cleanup = () => {
+        try {
+            ns.print("正在关闭所有目标脚本...");
+            const hostname = ns.getHostname();
+            const scriptsToKill = [
+                CONFIG.SCRIPTS.autohack.path,
+                CONFIG.SCRIPTS.stock.path,
+                CONFIG.SCRIPTS.hnps.path
+            ];
+            
+            scriptsToKill.forEach(script => {
+                try {
+                    if (ns.scriptRunning(script, hostname)) {
+                        ns.scriptKill(script, hostname);
+                    }
+                } catch (e) {
+                    ns.print(`无法关闭脚本 ${script}: ${String(e).substring(0, 100)}`);
+                }
+            });
+            
+            ns.print("清理完成");
+        } catch (e) {
+            ns.print(`清理过程中发生错误: ${String(e).substring(0, 100)}`);
+        }
+    };
+    
+    // 设置退出时的清理函数
+    ns.atExit(cleanup);
+
+    // ======================
+    // 状态管理系统
+    // ======================
+    const state = {
+        player: {
+            hacking: 0,
+            money: 0,
+            incomeRate: 0,
+            incomeSamples: []
+        },
+        hnps: {
+            nodes: 0,
+            production: 0,
+            investment: 0,
+            rate: 0,
+            roi: 0,
+            breakeven: 0,
+            nextUpgradeCost: Infinity,
+            upgradeType: "none"
+        },
+        stock: {
+            hasAccess: false,
+            has4SData: false
+        },
         scripts: {
-            autohack: { running: false, memUsage: 0 },
-            stock: { running: false, profit: 0 },
-            hnps: { running: false }
+            autohack: { running: false, ramUsage: 0, threads: 0, retries: 0, lastError: null },
+            stock: { running: false, retries: 0, lastError: null },
+            hnps: { running: false, retries: 0, lastError: null }
         },
         performance: {
-            lastCycleTime: 0,
-            cycleTimeAvg: 0
+            cycleTime: 0,
+            avgCycleTime: 0,
+            samples: []
+        },
+        errors: [],
+        errorStats: {
+            total: 0,
+            lastErrorTime: 0,
+            errorRate: 0
+        },
+        system: {
+            healthy: true,
+            degraded: false,
+            lastRecovery: 0
         }
     };
 
-    //=======================
-    // 工具函数
-    //=======================
-
-    const formatBreakEvenTime = (hours) => {
-        if (hours === Infinity) return "∞";
-        if (hours > 24 * 365) return `${(hours / (24 * 365)).toFixed(1)}年`;
-        if (hours > 24 * 30) return `${(hours / (24 * 30)).toFixed(1)}月`;
-        if (hours > 168) return `${(hours / 168).toFixed(1)}周`;
-        if (hours > 24) return `${(hours / 24).toFixed(1)}天`;
-        if (hours >= 1) return `${hours.toFixed(1)}小时`;
-        if (hours >= 1 / 60) return `${(hours * 60).toFixed(0)}分钟`;
-        return `${(hours * 3600).toFixed(0)}秒`;
+    /**
+     * 记录错误并处理错误抑制和恢复
+     * @param {string} context 错误发生的上下文
+     * @param {Error} error 错误对象
+     * @param {number} severity 错误严重级别
+     * @param {boolean} recoverable 是否可恢复
+     */
+    const recordError = (context, error, severity=ErrorType.FUNCTIONAL, recoverable=true) => {
+        const now = Date.now();
+        const errorEntry = {
+            time: new Date().toLocaleTimeString(),
+            timestamp: now,
+            context,
+            message: String(error).substring(0, 200),
+            stack: error.stack ? String(error.stack).substring(0, 300) : undefined,
+            severity,
+            recoverable
+        };
+        
+        // 更新错误统计
+        state.errorStats.total++;
+        if (state.errorStats.lastErrorTime > 0) {
+            const timeSinceLastError = now - state.errorStats.lastErrorTime;
+            state.errorStats.errorRate = 60000 / Math.max(1000, timeSinceLastError); // 每分钟错误率
+        }
+        state.errorStats.lastErrorTime = now;
+        
+        // 如果是严重错误，标记系统为不健康
+        if (severity === ErrorType.CRITICAL) {
+            state.system.healthy = false;
+        } else if (severity === ErrorType.FUNCTIONAL) {
+            state.system.degraded = true;
+        }
+        
+        // 添加到错误列表
+        state.errors.unshift(errorEntry);
+        if (state.errors.length > 5) state.errors.pop();
+        
+        // 如果错误率过高，考虑进入安全模式
+        if (state.errorStats.errorRate > 10) { // 每分钟超过10个错误
+            state.system.healthy = false;
+            state.system.degraded = true;
+            errorEntry.message = "[高错误率] " + errorEntry.message;
+            errorEntry.severity = ErrorType.CRITICAL;
+        }
+        
+        return errorEntry;
     };
 
-    const renderProgressBar = (value, max, width = 20) => {
-        const progress = Math.min(1, Math.max(0, value / max));
-        const filled = Math.floor(progress * width);
-        const empty = width - filled;
-        return '[' + '█'.repeat(filled) + ' '.repeat(empty) + ']';
-    };
-
-    const scriptExists = (script) => ns.fileExists(script, HOST);
-
-    const safeRun = async (script, threads = 1) => {
+    /**
+     * 尝试恢复系统状态
+     */
+    const attemptRecovery = async () => {
+        const now = Date.now();
+        
+        // 防止过于频繁的恢复尝试
+        if (now - state.system.lastRecovery < 30000) {
+            return false;
+        }
+        
+        state.system.lastRecovery = now;
+        ns.print("尝试系统恢复...");
+        
         try {
-            return scriptExists(script) ? ns.run(script, threads) !== 0 : false;
+            // 1. 清理所有可能冲突的脚本
+            cleanup();
+            
+            // 2. 重置关键状态
+            state.scripts.autohack.running = false;
+            state.scripts.stock.running = false;
+            state.scripts.hnps.running = false;
+            
+            // 3. 重新初始化数据收集
+            await updatePlayerData(true);
+            await updateHnpsData(true);
+            await updateStockData(true);
+            
+            // 4. 重置错误计数器
+            state.scripts.autohack.retries = 0;
+            state.scripts.stock.retries = 0;
+            state.scripts.hnps.retries = 0;
+            
+            state.system.healthy = true;
+            state.system.degraded = false;
+            ns.print("系统恢复成功");
+            return true;
         } catch (e) {
-            recordError(`启动失败: ${script}`, e);
+            recordError("系统恢复失败", e, ErrorType.CRITICAL, false);
             return false;
         }
     };
 
-    const recordError = (msg, error = null) => {
-        dashboardData.errors.unshift({
-            time: new Date().toLocaleTimeString(),
-            message: msg,
-            detail: error?.toString() || ''
-        });
-        if (dashboardData.errors.length > 5) dashboardData.errors.pop();
+    // ======================
+    // 数据采集模块 (使用ns.getHackingLevel())
+    // ======================
+    const updatePlayerData = async (force=false) => {
+        if (!state.system.healthy && !force) return false;
+        
+        try {
+            // 使用ns.getHackingLevel()获取黑客等级
+            state.player.hacking = ns.getHackingLevel();
+            
+            // 计算收入率 (每5秒采样)
+            const player = ns.getPlayer();
+            state.player.incomeSamples.push(player.money || 0);
+            if (state.player.incomeSamples.length > 10) {
+                state.player.incomeSamples.shift();
+            }
+            if (state.player.incomeSamples.length > 1) {
+                const timeWindow = state.player.incomeSamples.length * CONFIG.UI.refreshRate / 1000;
+                const incomeChange = state.player.incomeSamples[state.player.incomeSamples.length-1] - 
+                                    state.player.incomeSamples[0];
+                state.player.incomeRate = incomeChange / timeWindow || 0;
+            }
+            
+            state.player.money = player.money || 0;
+            return true;
+        } catch (e) {
+            recordError("更新玩家数据失败", e, ErrorType.FUNCTIONAL);
+            return false;
+        }
     };
 
-    //=======================
-    // HNPS 经济分析 (使用4哈希=1e6金钱的转换)
-    //=======================
-
-    const isHNPSProfitable = () => {
+    const updateHnpsData = async (force=false) => {
+        if (!state.system.healthy && !force) return false;
+        
         try {
-            let totalProduction = 0;
-            let totalSpent = 0;
-            const nodes = ns.hacknet.numNodes();
+            if (!ns.fileExists("hacknetnodes.exe")) {
+                state.hnps.nodes = 0;
+                return true;
+            }
+            
+            const nodes = ns.hacknet.numNodes() || 0;
+            let production = 0;
             let currentRate = 0;
+            let investment = 0;
+            let nextUpgradeCost = Infinity;
+            let upgradeType = "none";
 
             for (let i = 0; i < nodes; i++) {
-                const node = ns.hacknet.getNodeStats(i);
-                // 应用4哈希=1e6金钱的转换
-                const nodeProduction = (node.totalProduction / HASH_TO_CASH_RATIO) * 1e6;
-                const nodeCurrentRate = (node.production / HASH_TO_CASH_RATIO) * 1e6;
-
-                totalProduction += nodeProduction;
-                currentRate += nodeCurrentRate;
-
-                // 计算节点购买成本
-                totalSpent += ns.hacknet.getPurchaseNodeCost(i);
-
-                // 计算历史升级成本
-                const nodeData = ns.hacknet.getNodeStats(i);
-                if (nodeData.level > 1) {
-                    for (let l = 1; l < nodeData.level; l++) {
-                        totalSpent += ns.hacknet.getLevelUpgradeCost(i, 1);
+                try {
+                    const stats = ns.hacknet.getNodeStats(i);
+                    production += (stats.totalProduction || 0) * CONFIG.HASH_VALUE;
+                    currentRate += (stats.production || 0) * CONFIG.HASH_VALUE;
+                    
+                    // 节点成本
+                    investment += ns.hacknet.getPurchaseNodeCost(i) || 0;
+                    
+                    // 升级成本
+                    const levelCost = ns.hacknet.getLevelUpgradeCost(i, 1) || Infinity;
+                    const ramCost = ns.hacknet.getRamUpgradeCost(i, 1) || Infinity;
+                    const coreCost = ns.hacknet.getCoreUpgradeCost(i, 1) || Infinity;
+                    
+                    // 找出最便宜升级
+                    const minCost = Math.min(levelCost, ramCost, coreCost);
+                    if (minCost < nextUpgradeCost) {
+                        nextUpgradeCost = minCost;
+                        if (minCost === levelCost) upgradeType = "level";
+                        else if (minCost === ramCost) upgradeType = "ram";
+                        else upgradeType = "core";
                     }
-                }
-                if (nodeData.ram > 1) {
-                    for (let r = 1; r < nodeData.ram; r *= 2) {
-                        totalSpent += ns.hacknet.getRamUpgradeCost(i, 1);
-                    }
-                }
-                if (nodeData.cores > 1) {
-                    for (let c = 1; c < nodeData.cores; c++) {
-                        totalSpent += ns.hacknet.getCoreUpgradeCost(i, 1);
-                    }
+                } catch (e) {
+                    recordError(`更新HNPS节点${i}数据失败`, e, ErrorType.WARNING);
+                    continue; // 继续处理其他节点
                 }
             }
 
-            const roi = totalProduction / Math.max(1, totalSpent);
-            const breakEvenTime = currentRate > 0 ? (totalSpent - totalProduction) / currentRate / 3600 : Infinity;
-
-            dashboardData.hnpsStats = {
+            state.hnps = {
                 nodes,
-                totalProduction,
-                totalSpent,
-                roi,
-                breakEvenTime,
-                currentRate
+                production,
+                investment,
+                rate: currentRate,
+                roi: production / Math.max(1, investment),
+                breakeven: currentRate > 0 ? (investment - production) / currentRate : Infinity,
+                nextUpgradeCost,
+                upgradeType
             };
-
-            // 动态收益判断标准
-            const minAcceptableROI = nodes > 10 ? 1.5 : 1.2;
-            return roi > minAcceptableROI || breakEvenTime < 12;
+            return true;
         } catch (e) {
-            recordError('HNPS收益计算失败', e);
+            recordError("更新HNPS数据失败", e, ErrorType.FUNCTIONAL);
             return false;
         }
     };
 
-    //=======================
-    // 脚本管理
-    //=======================
-
-    const manageAutohack = async () => {
+    const updateStockData = async (force=false) => {
+        if (!state.system.healthy && !force) return false;
+        
         try {
-            const shouldRun = ns.getHackingLevel() < 8000;
-            if (shouldRun && !dashboardData.scripts.autohack.running) {
-                if (await safeRun(SCRIPT2)) {
-                    dashboardData.scripts.autohack.running = true;
+            // 仅检查股票API访问权限
+            state.stock.hasAccess = ns.stock.hasTIXAPIAccess();
+            state.stock.has4SData = ns.stock.has4SDataTIXAPI?.() ?? false;
+            return true;
+        } catch (e) {
+            recordError("更新股票数据失败", e, ErrorType.FUNCTIONAL);
+            return false;
+        }
+    };
+
+    // ======================
+    // 脚本管理模块 (使用state.player.hacking)
+    // ======================
+    const manageScripts = async () => {
+        if (!state.system.healthy) return false;
+        
+        try {
+            // 管理自动黑客 - 使用state.player.hacking(来自ns.getHackingLevel())
+            const shouldRunAutohack = state.player.hacking < CONFIG.SCRIPTS.autohack.minHackingLevel;
+            if (shouldRunAutohack !== state.scripts.autohack.running) {
+                try {
+                    if (shouldRunAutohack) {
+                        const pid = await ns.run(CONFIG.SCRIPTS.autohack.path);
+                        state.scripts.autohack.running = pid !== 0;
+                        if (state.scripts.autohack.running) {
+                            state.scripts.autohack.retries = 0;
+                            state.scripts.autohack.lastError = null;
+                        } else {
+                            throw new Error("无法启动autohack脚本");
+                        }
+                    } else {
+                        ns.scriptKill(CONFIG.SCRIPTS.autohack.path, ns.getHostname());
+                        state.scripts.autohack.running = false;
+                    }
+                } catch (e) {
+                    state.scripts.autohack.retries++;
+                    state.scripts.autohack.lastError = e;
+                    
+                    if (state.scripts.autohack.retries >= CONFIG.ERROR.MAX_RETRIES) {
+                        recordError("autohack脚本管理失败，达到最大重试次数", e, ErrorType.FUNCTIONAL);
+                        state.system.degraded = true;
+                    } else {
+                        recordError(`autohack脚本管理失败，将重试(${state.scripts.autohack.retries}/${CONFIG.ERROR.MAX_RETRIES})`, e, ErrorType.TRANSIENT);
+                    }
                 }
-            } else if (!shouldRun && dashboardData.scripts.autohack.running) {
-                ns.scriptKill(SCRIPT2, HOST);
-                dashboardData.scripts.autohack.running = false;
             }
-
-            // 更新内存使用情况 - 修正版本
-            if (dashboardData.scripts.autohack.running) {
-                const scriptRam = ns.getScriptRam(SCRIPT2);
-                const scriptInfo = ns.ps(HOST).find(script => script.filename === SCRIPT2);
-                dashboardData.scripts.autohack.memUsage = scriptRam * (scriptInfo?.threads || 1);
-            }
-        } catch (e) {
-            recordError('自动黑客管理失败', e);
-        }
-    };
-
-    const manageStock = async () => {
-        try {
-            const hasTIX = ns.stock.has4SDataTIXAPI?.() ?? false;
-            if (hasTIX && !dashboardData.scripts.stock.running) {
-                if (await safeRun(SCRIPT1)) {
-                    dashboardData.scripts.stock.running = true;
+            
+            // 更新自动黑客资源使用
+            if (state.scripts.autohack.running) {
+                try {
+                    const proc = ns.ps().find(p => p.filename === CONFIG.SCRIPTS.autohack.path);
+                    if (proc) {
+                        state.scripts.autohack.ramUsage = CONFIG.SCRIPTS.autohack.ram * (proc.threads || 0);
+                        state.scripts.autohack.threads = proc.threads || 0;
+                    } else {
+                        state.scripts.autohack.running = false;
+                        throw new Error("autohack脚本意外终止");
+                    }
+                } catch (e) {
+                    recordError("更新autohack脚本状态失败", e, ErrorType.WARNING);
                 }
-            } else if (!hasTIX && dashboardData.scripts.stock.running) {
-                ns.scriptKill(SCRIPT1, HOST);
-                dashboardData.scripts.stock.running = false;
             }
 
-            // 更新股票利润
-            if (dashboardData.scripts.stock.running) {
-                const portfolio = ns.stock.getPortfolio();
-                dashboardData.scripts.stock.profit = portfolio.reduce((sum, pos) => sum + pos.profit, 0);
-            }
-        } catch (e) {
-            recordError('股票管理失败', e);
-        }
-    };
-
-    const manageHNPS = async () => {
-        try {
-            const shouldRun = isHNPSProfitable();
-            if (shouldRun && !dashboardData.scripts.hnps.running) {
-                if (await safeRun(SCRIPT3)) {
-                    dashboardData.scripts.hnps.running = true;
+            // 管理股票脚本
+            const shouldRunStock = state.stock.hasAccess && 
+                                 state.stock.has4SData &&
+                                 (state.player.money || 0) >= CONFIG.SCRIPTS.stock.minFunds;
+            if (shouldRunStock !== state.scripts.stock.running) {
+                try {
+                    if (shouldRunStock) {
+                        const pid = await ns.run(CONFIG.SCRIPTS.stock.path);
+                        state.scripts.stock.running = pid !== 0;
+                        if (state.scripts.stock.running) {
+                            state.scripts.stock.retries = 0;
+                            state.scripts.stock.lastError = null;
+                        } else {
+                            throw new Error("无法启动stock脚本");
+                        }
+                    } else {
+                        ns.scriptKill(CONFIG.SCRIPTS.stock.path, ns.getHostname());
+                        state.scripts.stock.running = false;
+                    }
+                } catch (e) {
+                    state.scripts.stock.retries++;
+                    state.scripts.stock.lastError = e;
+                    
+                    if (state.scripts.stock.retries >= CONFIG.ERROR.MAX_RETRIES) {
+                        recordError("stock脚本管理失败，达到最大重试次数", e, ErrorType.FUNCTIONAL);
+                    } else {
+                        recordError(`stock脚本管理失败，将重试(${state.scripts.stock.retries}/${CONFIG.ERROR.MAX_RETRIES})`, e, ErrorType.TRANSIENT);
+                    }
                 }
-            } else if (!shouldRun && dashboardData.scripts.hnps.running) {
-                ns.scriptKill(SCRIPT3, HOST);
-                dashboardData.scripts.hnps.running = false;
             }
+
+            // 管理HNPS脚本
+            const shouldRunHnps = (state.hnps.roi || 0) > CONFIG.SCRIPTS.hnps.minROI;
+            if (shouldRunHnps !== state.scripts.hnps.running) {
+                try {
+                    if (shouldRunHnps) {
+                        const pid = await ns.run(CONFIG.SCRIPTS.hnps.path);
+                        state.scripts.hnps.running = pid !== 0;
+                        if (state.scripts.hnps.running) {
+                            state.scripts.hnps.retries = 0;
+                            state.scripts.hnps.lastError = null;
+                        } else {
+                            throw new Error("无法启动HNPS脚本");
+                        }
+                    } else {
+                        ns.scriptKill(CONFIG.SCRIPTS.hnps.path, ns.getHostname());
+                        state.scripts.hnps.running = false;
+                    }
+                } catch (e) {
+                    state.scripts.hnps.retries++;
+                    state.scripts.hnps.lastError = e;
+                    
+                    if (state.scripts.hnps.retries >= CONFIG.ERROR.MAX_RETRIES) {
+                        recordError("HNPS脚本管理失败，达到最大重试次数", e, ErrorType.FUNCTIONAL);
+                    } else {
+                        recordError(`HNPS脚本管理失败，将重试(${state.scripts.hnps.retries}/${CONFIG.ERROR.MAX_RETRIES})`, e, ErrorType.TRANSIENT);
+                    }
+                }
+            }
+            
+            return true;
         } catch (e) {
-            recordError('HNPS管理失败', e);
+            recordError("脚本管理失败", e, ErrorType.CRITICAL);
+            return false;
         }
     };
 
-    //=======================
-    // 数据更新
-    //=======================
-
-    const updateDashboardData = async () => {
-        const cycleStart = Date.now();
-        try {
-            const now = Date.now();
-            if (now - dashboardData.lastUpdate < 1000) return;
-
-            dashboardData.hackingLevel = ns.getHackingLevel();
-            dashboardData.money = ns.getPlayer().money;
-
-            // 更新脚本状态
-            dashboardData.scripts.autohack.running = ns.isRunning(SCRIPT2, HOST);
-            dashboardData.scripts.stock.running = ns.isRunning(SCRIPT1, HOST);
-            dashboardData.scripts.hnps.running = ns.isRunning(SCRIPT3, HOST);
-
-            dashboardData.lastUpdate = now;
-        } catch (e) {
-            recordError('数据更新失败', e);
-        } finally {
-            // 计算性能指标
-            const cycleTime = Date.now() - cycleStart;
-            dashboardData.performance.lastCycleTime = cycleTime;
-            dashboardData.performance.cycleTimeAvg =
-                (dashboardData.performance.cycleTimeAvg * 9 + cycleTime) / 10;
-        }
-    };
-
-    //=======================
-    // 仪表盘渲染
-    //=======================
-
+    // ======================
+    // 界面渲染模块
+    // ======================
     const renderDashboard = () => {
         try {
-            const { green, red, yellow, cyan, blue, white, bgBlue, bgRed, bgGreen, bgYellow, reset } = COLORS;
-            let output = '';
-
-            // 顶部标题栏
-            output += `${bgBlue}${white}=== BITBURNER 系统监控 ===${reset}\n\n`;
-
-            // 基础信息部分
-            output += `${blue}🕒 时间:${reset} ${cyan}${new Date().toLocaleTimeString()}${reset} | `;
-            output += `${blue}⚡ 性能:${reset} ${dashboardData.performance.lastCycleTime}ms (avg: ${dashboardData.performance.cycleTimeAvg.toFixed(1)}ms)\n`;
-
-            output += `${blue}💻 黑客等级:${reset} ${cyan}Lv.${dashboardData.hackingLevel}${reset} `;
-            output += renderProgressBar(dashboardData.hackingLevel, 8000);
-            output += `\n`;
-
-            output += `${blue}💰 资金:${reset} ${cyan}$${ns.formatNumber(dashboardData.money, 2)}${reset}\n\n`;
-
-            // HNPS经济数据 (显示转换后的美元值)
-            output += `${bgBlue}${white}=== HNPS 经济分析 ===${reset}\n`;
-            output += `${blue}🌐 节点数量:${reset} ${cyan}${dashboardData.hnpsStats.nodes}${reset}\n`;
-            output += `${blue}📈 当前收益:${reset} ${cyan}$${ns.formatNumber(dashboardData.hnpsStats.currentRate, 2)}/秒${reset}\n`;
-            output += `${blue}💵 总收益:${reset} ${cyan}$${ns.formatNumber(dashboardData.hnpsStats.totalProduction, 2)}${reset}\n`;
-            output += `${blue}💸 总投资:${reset} ${cyan}$${ns.formatNumber(dashboardData.hnpsStats.totalSpent, 2)}${reset}\n`;
-
-            const roiColor = dashboardData.hnpsStats.roi >= 1.5 ? green :
-                dashboardData.hnpsStats.roi >= 1.2 ? yellow : red;
-            output += `${blue}🔄 ROI:${reset} ${roiColor}${dashboardData.hnpsStats.roi.toFixed(2)}x${reset} | `;
-
-            const betColor = dashboardData.hnpsStats.breakEvenTime < 6 ? green :
-                dashboardData.hnpsStats.breakEvenTime < 12 ? yellow : red;
-            output += `${blue}回本时间:${reset} ${betColor}${formatBreakEvenTime(dashboardData.hnpsStats.breakEvenTime)}${reset}\n\n`;
-
-            // 脚本状态部分
-            output += `${bgBlue}${white}=== 脚本状态 ===${reset}\n`;
-
-            // 自动黑客状态
-            const autohackStatus = dashboardData.scripts.autohack.running ?
-                `${green}运行中 (${ns.formatRam(dashboardData.scripts.autohack.memUsage)})` :
-                `${red}已停止`;
-            output += `${blue}🤖 自动黑客:${reset} ${autohackStatus}${reset}\n`;
-
-            // 股票状态
-            const stockStatus = dashboardData.scripts.stock.running ?
-                `${green}运行中 ($${ns.formatNumber(dashboardData.scripts.stock.profit, 2)})` :
-                `${red}已停止`;
-            output += `${blue}📈 股票交易:${reset} ${stockStatus}${reset}\n`;
-
-            // HNPS状态
-            const hnpsStatus = dashboardData.scripts.hnps.running ?
-                (dashboardData.hnpsStats.roi >= 1.2 ? `${green}运行中` : `${yellow}运行中(低收益)`) :
-                `${red}已停止`;
-            output += `${blue}⚙ HNPS管理:${reset} ${hnpsStatus}${reset}\n\n`;
-
-            // 错误显示
-            if (dashboardData.errors.length > 0) {
-                output += `${bgRed}${white}=== 最近错误 (${dashboardData.errors.length}) ===${reset}\n`;
-                dashboardData.errors.slice(0, 3).forEach(err => {
-                    output += `${red}${err.time} ${err.message}${reset}\n`;
-                    if (err.detail) output += `    ${yellow}${err.detail}${reset}\n`;
+            const c = CONFIG.UI.theme;
+            let output = [];
+            
+            // 1. 标题栏 (显示系统健康状态)
+            const titleColor = !state.system.healthy ? c.bgDanger : 
+                             state.system.degraded ? c.bgWarning : c.bgPrimary;
+            const statusText = !state.system.healthy ? "CRITICAL" : 
+                             state.system.degraded ? "DEGRADED" : "NORMAL";
+            output.push(`${titleColor}${c.secondary}=== BITBURNER 监控系统 [${statusText}] ===${c.reset}`);
+            
+            // 2. 玩家状态
+            output.push(`${c.primary}◆ 玩家状态${c.reset}`);
+            output.push(`等级: ${format.number(state.player.hacking)} ${format.progress(state.player.hacking, CONFIG.SCRIPTS.autohack.minHackingLevel)}`);
+            output.push(`资金: ${format.money(state.player.money)} (${format.money(state.player.incomeRate)}/s)`);
+            
+            // 3. HNPS状态
+            const roiColor = (state.hnps.roi || 0) > 1.5 ? c.success : 
+                            (state.hnps.roi || 0) > 1.2 ? c.warning : c.danger;
+            output.push(`\n${c.primary}◆ HNPS网络${c.reset}`);
+            output.push(`节点: ${format.number(state.hnps.nodes)} | 收益: ${format.money(state.hnps.rate)}/s`);
+            output.push(`投资: ${format.money(state.hnps.investment)} | 回报: ${roiColor}${format.number(state.hnps.roi)}x${c.reset}`);
+            output.push(`回本: ${format.time(state.hnps.breakeven)} | 升级: ${state.hnps.upgradeType} (${format.money(state.hnps.nextUpgradeCost)})`);
+            
+            // 4. 股票状态 (简化显示)
+            output.push(`\n${c.primary}◆ 股票市场${c.reset}`);
+            output.push(`访问权限: ${state.stock.hasAccess ? c.success + "已获得" : c.danger + "未获得"}`);
+            output.push(`4S数据: ${state.stock.has4SData ? c.success + "已解锁" : c.warning + "未解锁"}`);
+            
+            // 5. 脚本状态 (显示重试次数和最后错误)
+            output.push(`\n${c.primary}◆ 脚本控制${c.reset}`);
+            output.push(`自动黑客: ${
+                state.scripts.autohack.running ? 
+                `${c.success}运行中${c.reset} (${format.number(state.scripts.autohack.threads)}线程)` : 
+                `${c.danger}已停止${c.reset}`
+            }${state.scripts.autohack.retries > 0 ? ` [重试:${state.scripts.autohack.retries}]` : ''}`);
+            
+            output.push(`股票脚本: ${
+                state.scripts.stock.running ? c.success + "运行中" : 
+                state.stock.hasAccess && state.stock.has4SData ? c.warning + "待机" : c.danger + "无访问"
+            }${c.reset}${state.scripts.stock.retries > 0 ? ` [重试:${state.scripts.stock.retries}]` : ''}`);
+            
+            output.push(`HNPS管理: ${
+                state.scripts.hnps.running ? 
+                ((state.hnps.roi || 0) > 1.2 ? c.success : c.warning) + "运行中" : 
+                c.danger + "已停止"
+            }${c.reset}${state.scripts.hnps.retries > 0 ? ` [重试:${state.scripts.hnps.retries}]` : ''}`);
+            
+            // 6. 错误信息 (显示更详细的错误信息)
+            if (state.errors.length > 0) {
+                output.push(`\n${c.bgDanger}${c.secondary}◆ 最近错误 (共${state.errorStats.total}次, 频率:${format.number(state.errorStats.errorRate)}/分钟)${c.reset}`);
+                state.errors.slice(0, 2).forEach(err => {
+                    const severityText = ["CRIT", "FUNC", "TRANS", "WARN"][err.severity] || "UNKN";
+                    output.push(`${err.time} [${severityText}${err.recoverable ? '' : '*'}]: ${err.context}`);
+                    output.push(`  ${c.danger}${err.message}${c.reset}`);
+                    if (err.stack) {
+                        output.push(`  ${c.danger}${err.stack.split('\n')[0]}${c.reset}`);
+                    }
                 });
+                
+                if (state.errorStats.total > 2) {
+                    output.push(`  ${c.danger}...还有${state.errorStats.total - 2}个错误未显示${c.reset}`);
+                }
             }
-
+            
+            // 7. 性能信息
+            output.push(`\n${c.secondary}周期: ${format.number(state.performance.cycleTime)}ms (平均 ${format.number(state.performance.avgCycleTime)}ms)${c.reset}`);
+            
+            // 8. 系统状态建议
+            if (!state.system.healthy) {
+                output.push(`\n${c.bgDanger}${c.secondary}◆ 系统严重错误! 建议重启脚本${c.reset}`);
+            } else if (state.system.degraded) {
+                output.push(`\n${c.bgWarning}${c.secondary}◆ 系统部分功能降级${c.reset}`);
+            }
+            
             ns.clearLog();
-            ns.print(output);
+            output.forEach(line => ns.print(line));
+            return true;
         } catch (e) {
-            ns.print(`${red}仪表盘渲染错误: ${e}${reset}`);
+            ns.print(`${CONFIG.UI.theme.danger}渲染错误: ${String(e).substring(0, 150)}${CONFIG.UI.theme.reset}`);
+            return false;
         }
     };
 
-    //=======================
-    // 主循环
-    //=======================
+    // ======================
+    // 主程序
+    // ======================
+    ns.disableLog('ALL');
+    ns.clearLog();
+    ns.ui.openTail();
+    ns.ui.resizeTail(CONFIG.UI.width, CONFIG.UI.height);
+    
+    // 初始健康检查
+    try {
+        await updatePlayerData(true);
+        await updateHnpsData(true);
+        await updateStockData(true);
+    } catch (e) {
+        recordError("初始健康检查失败", e, ErrorType.CRITICAL);
+        ns.print(`${CONFIG.UI.theme.danger}初始健康检查失败，脚本无法继续运行${CONFIG.UI.theme.reset}`);
+        ns.print(`${CONFIG.UI.theme.danger}错误详情: ${String(e).substring(0, 150)}${CONFIG.UI.theme.reset}`);
+        return;
+    }
 
     while (true) {
+        const cycleStart = Date.now();
+        
         try {
-            await updateDashboardData();
-            await Promise.all([
-                manageAutohack(),
-                manageStock(),
-                manageHNPS()
-            ]);
-            renderDashboard();
-            await ns.sleep(MONITOR_INTERVAL);
+            // 如果系统不健康，尝试恢复
+            if (!state.system.healthy) {
+                const recovered = await attemptRecovery();
+                if (!recovered) {
+                    await ns.sleep(CONFIG.UI.refreshRate);
+                    continue;
+                }
+            }
+            
+            // 数据更新
+            const playerUpdated = await updatePlayerData();
+            const hnpsUpdated = await updateHnpsData();
+            const stockUpdated = await updateStockData();
+            
+            // 如果关键数据更新失败，标记系统为降级
+            if (!playerUpdated || !hnpsUpdated) {
+                state.system.degraded = true;
+            }
+            
+            // 脚本管理
+            const scriptsManaged = await manageScripts();
+            if (!scriptsManaged) {
+                state.system.degraded = true;
+            }
+            
+            // 性能记录
+            state.performance.cycleTime = Date.now() - cycleStart;
+            state.performance.samples.push(state.performance.cycleTime);
+            if (state.performance.samples.length > 10) {
+                state.performance.samples.shift();
+            }
+            state.performance.avgCycleTime = state.performance.samples.reduce((a,b) => a + b, 0) / state.performance.samples.length;
+            
+            // 渲染界面
+            const rendered = renderDashboard();
+            if (!rendered) {
+                state.system.degraded = true;
+            }
+            
+            // 如果系统降级但关键功能仍工作，尝试自动恢复
+            if (state.system.degraded && playerUpdated && hnpsUpdated && 
+                Date.now() - state.system.lastRecovery > 60000) {
+                await attemptRecovery();
+            }
         } catch (e) {
-            recordError('主循环错误', e);
-            await ns.sleep(5000);
+            recordError("主循环错误", e, ErrorType.CRITICAL);
+            
+            // 如果连续发生严重错误，考虑停止脚本
+            const criticalErrors = state.errors.filter(err => err.severity === ErrorType.CRITICAL).length;
+            if (criticalErrors >= 3) {
+                ns.print(`${CONFIG.UI.theme.bgDanger}${CONFIG.UI.theme.secondary}检测到多个严重错误，脚本将停止运行${CONFIG.UI.theme.reset}`);
+                break;
+            }
+        } finally {
+            await ns.sleep(CONFIG.UI.refreshRate);
         }
     }
 }
-
