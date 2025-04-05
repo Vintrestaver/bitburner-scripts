@@ -422,24 +422,19 @@ export async function main(ns) {
                 }
             }
 
-            // 管理股票脚本
+            // 管理股票脚本 - 修改为永久运行，仅检查启动条件
             const shouldRunStock = state.stock.hasAccess &&
                 state.stock.has4SData &&
                 (state.player.money || 0) >= CONFIG.SCRIPTS.stock.minFunds;
-            if (shouldRunStock !== state.scripts.stock.running) {
+            if (shouldRunStock && !state.scripts.stock.running) {
                 try {
-                    if (shouldRunStock) {
-                        const pid = await ns.run(CONFIG.SCRIPTS.stock.path);
-                        state.scripts.stock.running = pid !== 0;
-                        if (state.scripts.stock.running) {
-                            state.scripts.stock.retries = 0;
-                            state.scripts.stock.lastError = null;
-                        } else {
-                            throw new Error("无法启动stock脚本");
-                        }
+                    const pid = await ns.run(CONFIG.SCRIPTS.stock.path);
+                    state.scripts.stock.running = pid !== 0;
+                    if (state.scripts.stock.running) {
+                        state.scripts.stock.retries = 0;
+                        state.scripts.stock.lastError = null;
                     } else {
-                        ns.scriptKill(CONFIG.SCRIPTS.stock.path, ns.getHostname());
-                        state.scripts.stock.running = false;
+                        throw new Error("无法启动stock脚本");
                     }
                 } catch (e) {
                     state.scripts.stock.retries++;
@@ -524,52 +519,51 @@ export async function main(ns) {
 
             // 5. 脚本状态 (显示重试次数和最后错误)
             output.push(`\n${c.primary}◆ 脚本控制${c.reset}`);
-            output.push(`自动黑客: ${state.scripts.autohack.running ?
-                `${c.success}运行中${c.reset} (${format.number(state.scripts.autohack.threads)}线程)` :
-                `${c.danger}已停止${c.reset}`
-                }${state.scripts.autohack.retries > 0 ? ` [重试:${state.scripts.autohack.retries}]` : ''}`);
+            const scriptStatus = (running, color, status, retries) =>
+                `${running ? color + status : c.danger + "已停止"}${c.reset}${retries > 0 ? ` [重试:${format.number(retries)}]` : ''}`;
 
-            output.push(`股票脚本: ${state.scripts.stock.running ? c.success + "运行中" :
-                state.stock.hasAccess && state.stock.has4SData ? c.warning + "待机" : c.danger + "无访问"
-                }${c.reset}${state.scripts.stock.retries > 0 ? ` [重试:${state.scripts.stock.retries}]` : ''}`);
+            output.push(`自动黑客: ${scriptStatus(state.scripts.autohack.running, c.success,
+                `运行中 (${format.number(state.scripts.autohack.threads)}线程)`, state.scripts.autohack.retries)}`);
 
-            output.push(`HNPS管理: ${state.scripts.hnps.running ?
-                ((state.hnps.roi || 0) > 1.2 ? c.success : c.warning) + "运行中" :
-                c.danger + "已停止"
-                }${c.reset}${state.scripts.hnps.retries > 0 ? ` [重试:${state.scripts.hnps.retries}]` : ''}`);
+            output.push(`股票脚本: ${state.scripts.stock.running ? scriptStatus(true, c.success, "运行中", state.scripts.stock.retries) :
+                state.stock.hasAccess && state.stock.has4SData ? scriptStatus(false, c.warning, "待机", state.scripts.stock.retries) :
+                    scriptStatus(false, c.danger, "无访问", state.scripts.stock.retries)}`);
+
+            output.push(`HNPS管理: ${scriptStatus(state.scripts.hnps.running,
+                (state.hnps.roi || 0) > 1.2 ? c.success : c.warning, "运行中", state.scripts.hnps.retries)}`);
 
             // 6. 错误信息 (显示更详细的错误信息)
             if (state.errors.length > 0) {
-                output.push(`\n${c.bgDanger}${c.secondary}◆ 最近错误 (共${state.errorStats.total}次, 频率:${format.number(state.errorStats.errorRate)}/分钟)${c.reset}`);
+                output.push(`\n${c.bgDanger}${c.secondary}◆ 最近错误(共${state.errorStats.total}次, 频率: ${format.number(state.errorStats.errorRate)} / 分钟)${c.reset} `);
                 state.errors.slice(0, 2).forEach(err => {
                     const severityText = ["CRIT", "FUNC", "TRANS", "WARN"][err.severity] || "UNKN";
-                    output.push(`${err.time} [${severityText}${err.recoverable ? '' : '*'}]: ${err.context}`);
-                    output.push(`  ${c.danger}${err.message}${c.reset}`);
+                    output.push(`${err.time} [${severityText}${err.recoverable ? '' : '*'}]: ${err.context} `);
+                    output.push(`  ${c.danger}${err.message}${c.reset} `);
                     if (err.stack) {
-                        output.push(`  ${c.danger}${err.stack.split('\n')[0]}${c.reset}`);
+                        output.push(`  ${c.danger}${err.stack.split('\n')[0]}${c.reset} `);
                     }
                 });
 
                 if (state.errorStats.total > 2) {
-                    output.push(`  ${c.danger}...还有${state.errorStats.total - 2}个错误未显示${c.reset}`);
+                    output.push(`  ${c.danger}...还有${state.errorStats.total - 2}个错误未显示${c.reset} `);
                 }
             }
 
             // 7. 性能信息
-            output.push(`\n${c.secondary}周期: ${format.number(state.performance.cycleTime)}ms (平均 ${format.number(state.performance.avgCycleTime)}ms)${c.reset}`);
+            output.push(`\n${c.secondary} 周期: ${format.number(state.performance.cycleTime)} ms(平均 ${format.number(state.performance.avgCycleTime)}ms)${c.reset} `);
 
             // 8. 系统状态建议
             if (!state.system.healthy) {
-                output.push(`\n${c.bgDanger}${c.secondary}◆ 系统严重错误! 建议重启脚本${c.reset}`);
+                output.push(`\n${c.bgDanger}${c.secondary}◆ 系统严重错误! 建议重启脚本${c.reset} `);
             } else if (state.system.degraded) {
-                output.push(`\n${c.bgWarning}${c.secondary}◆ 系统部分功能降级${c.reset}`);
+                output.push(`\n${c.bgWarning}${c.secondary}◆ 系统部分功能降级${c.reset} `);
             }
 
             ns.clearLog();
             output.forEach(line => ns.print(line));
             return true;
         } catch (e) {
-            ns.print(`${CONFIG.UI.theme.danger}渲染错误: ${String(e).substring(0, 150)}${CONFIG.UI.theme.reset}`);
+            ns.print(`${CONFIG.UI.theme.danger} 渲染错误: ${String(e).substring(0, 150)}${CONFIG.UI.theme.reset} `);
             return false;
         }
     };
@@ -589,8 +583,8 @@ export async function main(ns) {
         await updateStockData(true);
     } catch (e) {
         recordError("初始健康检查失败", e, ErrorType.CRITICAL);
-        ns.print(`${CONFIG.UI.theme.danger}初始健康检查失败，脚本无法继续运行${CONFIG.UI.theme.reset}`);
-        ns.print(`${CONFIG.UI.theme.danger}错误详情: ${String(e).substring(0, 150)}${CONFIG.UI.theme.reset}`);
+        ns.print(`${CONFIG.UI.theme.danger} 初始健康检查失败，脚本无法继续运行${CONFIG.UI.theme.reset} `);
+        ns.print(`${CONFIG.UI.theme.danger} 错误详情: ${String(e).substring(0, 150)}${CONFIG.UI.theme.reset} `);
         return;
     }
 
@@ -648,7 +642,7 @@ export async function main(ns) {
             // 如果连续发生严重错误，考虑停止脚本
             const criticalErrors = state.errors.filter(err => err.severity === ErrorType.CRITICAL).length;
             if (criticalErrors >= 3) {
-                ns.print(`${CONFIG.UI.theme.bgDanger}${CONFIG.UI.theme.secondary}检测到多个严重错误，脚本将停止运行${CONFIG.UI.theme.reset}`);
+                ns.print(`${CONFIG.UI.theme.bgDanger}${CONFIG.UI.theme.secondary} 检测到多个严重错误，脚本将停止运行${CONFIG.UI.theme.reset} `);
                 break;
             }
         } finally {
