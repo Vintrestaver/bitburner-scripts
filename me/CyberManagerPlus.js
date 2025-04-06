@@ -17,10 +17,10 @@ export async function main(ns) {
         RESERVE_FILE: "reserve.txt",
         MAX_SERVERS: 25,
         SERVER_PREFIX: "daemon",
-        UPDATE_INTERVAL: 3000,
+        UPDATE_INTERVAL: 1000,
         HASH_THRESHOLD: 0.95,
-        DEBUG_MODE: false,
-        UI_WIDTH: 60,
+        DEBUG_MODE: true,
+        UI_WIDTH: 50,
         MIN_RAM: 8,
         HACKNET_PRIORITY: ["RAM", "Core", "Level", "Cache"],
         VALID_HACKNET_TYPES: ["RAM", "Core", "Level", "Cache"],
@@ -29,11 +29,11 @@ export async function main(ns) {
             autohack: {
                 path: 'me/autohack.js',
                 minHackingLevel: 8000,
-                ram: 15.35
+                ram: ns.getScriptRam('me/autohack.js', 'home')
             },
             stock: {
                 path: 'me/stock.js',
-                ram: 57.25
+                ram: ns.getScriptRam('me/stock.js', 'home')
             }
         },
         HASH_VALUE: 1e6 / 4,
@@ -45,7 +45,7 @@ export async function main(ns) {
 
     // ====================== 系统管理器 ======================
     class SystemManager {
-        constructor(ns) {
+        constructor() {
             this.ns = ns;
             this.reserve = Number(this.ns.read(CONFIG.RESERVE_FILE)) || 0;
             this.loopCount = 0;
@@ -100,7 +100,7 @@ export async function main(ns) {
         format = {
             money: amount => {
                 if (isNaN(amount)) return "N/A";
-                return `$${ns.formatNumber(amount, 2)}`;
+                return `${amount < 0 ? '-$' : ' $'}${ns.formatNumber(Math.abs(amount), 2)}`;
             },
             time: seconds => {
                 if (seconds === Infinity) return "∞";
@@ -115,8 +115,9 @@ export async function main(ns) {
                 return `[${'█'.repeat(filled)}${' '.repeat(width - filled)}]`;
             },
             ram: gb => {
-                return `${ns.formatRam(gb, 1).padStart(7, '_')}`;
+                return `${ns.formatRam(gb, 0).padStart(5, '_')}`;
             }
+
         };
 
         // ========== 核心管理功能 ==========
@@ -145,8 +146,8 @@ export async function main(ns) {
                         upgrade: (i) => this.ns.hacknet.upgradeCore(i, 1)
                     },
                     Level: {
-                        getCost: (i) => this.ns.hacknet.getLevelUpgradeCost(i, 1),
-                        upgrade: (i) => this.ns.hacknet.upgradeLevel(i, 1)
+                        getCost: (i) => this.ns.hacknet.getLevelUpgradeCost(i, 10),
+                        upgrade: (i) => this.ns.hacknet.upgradeLevel(i, 10)
                     },
                     Cache: {
                         getCost: (i) => this.ns.hacknet.getCacheUpgradeCost(i),
@@ -188,7 +189,7 @@ export async function main(ns) {
                     this.canAfford(this.ns.getPurchasedServerCost(bestRam))) {
 
                     const hostname = this.ns.purchaseServer(
-                        CONFIG.SERVER_PREFIX + servers.length,
+                        CONFIG.SERVER_PREFIX,
                         bestRam
                     );
 
@@ -207,7 +208,7 @@ export async function main(ns) {
                         this.ns.killall(hostname);
                         if (this.ns.deleteServer(hostname)) {
                             const newHost = this.ns.purchaseServer(
-                                hostname.replace(/\d+$/, '') || CONFIG.SERVER_PREFIX,
+                                CONFIG.SERVER_PREFIX,
                                 bestRam
                             );
 
@@ -322,9 +323,9 @@ export async function main(ns) {
                 // 系统状态头
                 const statusColor = !this.state.system.healthy ? "\x1b[38;5;196m" :
                     this.state.system.degraded ? "\x1b[38;5;220m" : "\x1b[38;5;46m";
-                ui.push(`\x1b[38;5;21m${'≡'.repeat(CONFIG.UI_WIDTH)}\x1b[0m`);
+                ui.push(`\x1b[38;5;21m${'◼'.repeat(CONFIG.UI_WIDTH - 13)}\x1b[0m`);
                 ui.push(`${statusColor}▶ CyberManager \x1b[38;5;33mv1.2\x1b[0m | ` +
-                    `循环: \x1b[1m${this.loopCount}\x1b[0m | 运行: ${this.format.time((Date.now() - this.startTime) / 1000)}`);
+                    `循环: \x1b[1m${ns.formatNumber(this.loopCount, 0)}\x1b[0m | 运行: ${this.format.time((Date.now() - this.startTime) / 1000)}`);
 
                 // 资金面板
                 const moneyPanel = [
@@ -339,7 +340,7 @@ export async function main(ns) {
                 ui.push([
                     `\x1b[38;5;93m● Hacknet\x1b[0m 节点:${this.stats.hacknetNodes}`,
                     `缓存:${this.format.progress(hashPercent, 1, 12)}`,
-                    `效率:${(hashPercent * 100).toFixed(1)}%`
+                    `效率:${ns.formatPercent(hashPercent, 1)}%`
                 ].join(' | '));
 
                 // 服务器面板
@@ -371,7 +372,7 @@ export async function main(ns) {
 
                 // 底部状态栏
                 const health = this.state.system.healthy ? 46 : this.state.system.degraded ? 226 : 196;
-                ui.push(`\x1b[48;5;17m\x1b[38;5;${health}m${'■'.repeat(CONFIG.UI_WIDTH)}\x1b[0m`);
+                ui.push(`\x1b[48;5;17m\x1b[38;5;${health}m${'◼'.repeat(CONFIG.UI_WIDTH - 13)}\x1b[0m`);
 
                 this.ns.print(ui.join('\n'));
             } catch (e) {
@@ -381,6 +382,7 @@ export async function main(ns) {
     }
 
     // ====================== 主程序 ======================
+    /** @param {NS} ns */
     const manager = new SystemManager(ns);
     ns.disableLog('ALL');
     ns.ui.openTail();
@@ -390,6 +392,9 @@ export async function main(ns) {
     });
 
     while (true) {
+        const [W, H] = ns.ui.windowSize();
+        ns.ui.resizeTail(520, 200);
+        ns.ui.moveTail(W - 520, H - 200);
         manager.loopCount++;
 
         // 更新收入统计
