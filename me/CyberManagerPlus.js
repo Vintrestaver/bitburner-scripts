@@ -1,62 +1,60 @@
 /** 
- * 增强型综合网络管理系统 - CyberManager Plus v1.0
- * 合并自 HNPSmanager.js 和 manger.js
+ * 增强型综合网络管理系统 - CyberManager Plus v1.2
+ * 完整修复版
  * @param {NS} ns 
  */
 export async function main(ns) {
-    // ====================== 综合配置 ======================
+    // ====================== 常量定义 ======================
+    const ErrorType = {
+        CRITICAL: 0,
+        FUNCTIONAL: 1,
+        TRANSIENT: 2,
+        WARNING: 3
+    };
+
+    // ====================== 系统配置 ======================
     const CONFIG = {
-        // 来自HNPSmanager.js
         RESERVE_FILE: "reserve.txt",
         MAX_SERVERS: 25,
         SERVER_PREFIX: "daemon",
         UPDATE_INTERVAL: 3000,
         HASH_THRESHOLD: 0.95,
         DEBUG_MODE: false,
-        UI_WIDTH: 36,
+        UI_WIDTH: 60,
         MIN_RAM: 8,
-        HACKNET_PRIORITY: ["RAM", "Core", "Level"],
+        HACKNET_PRIORITY: ["RAM", "Core", "Level", "Cache"],
         VALID_HACKNET_TYPES: ["RAM", "Core", "Level", "Cache"],
 
-        // 来自manger.js
         SCRIPTS: {
             autohack: {
                 path: 'me/autohack.js',
                 minHackingLevel: 8000,
-                ram: 1.7
+                ram: 15.35
             },
             stock: {
                 path: 'me/stock.js',
+                ram: 57.25
             }
         },
-        HASH_VALUE: 1e6 / 4,  // 4哈希 = 1百万
+        HASH_VALUE: 1e6 / 4,
         ERROR: {
-            MAX_RETRIES: 3,    // 最大重试次数
-            COOLDOWN: 5000     // 错误冷却时间(ms)
+            MAX_RETRIES: 3,
+            COOLDOWN: 5000
         }
-    };
-
-    // ====================== 错误类型枚举 ======================
-    const ErrorType = {
-        CRITICAL: 0,    // 需要立即停止脚本
-        FUNCTIONAL: 1,  // 功能部分失效
-        TRANSIENT: 2,   // 临时性错误
-        WARNING: 3      // 不影响主要功能
     };
 
     // ====================== 系统管理器 ======================
     class SystemManager {
-        /** @param {NS} ns */
         constructor(ns) {
             this.ns = ns;
             this.reserve = Number(this.ns.read(CONFIG.RESERVE_FILE)) || 0;
-            this.lastUpdate = 0;
             this.loopCount = 0;
+            this.startTime = Date.now();
 
-            // 来自HNPSmanager.js的统计
+            // 初始化统计
             this.stats = {
-                hacknetNodes: 0,
-                serversPurchased: 0,
+                hacknetNodes: this.ns.hacknet.numNodes(),
+                serversPurchased: this.ns.getPurchasedServers().length,
                 serversUpgraded: 0,
                 hashCacheUpgrades: 0,
                 totalSpent: 0,
@@ -65,209 +63,78 @@ export async function main(ns) {
                 lastHashes: this.ns.hacknet.numHashes()
             };
 
+            // 初始化状态
             this.state = {
                 player: {
                     hacking: this.ns.getHackingLevel(),
-                    money: this.ns.getPlayer().money
+                    money: this.ns.getPlayer().money,
+                    incomeRate: 0
                 },
                 stock: {
                     has4SData: ns.stock.has4SDataTIXAPI()
                 },
                 scripts: {
-                    autohack: { running: false },
-                    stock: { running: false }
+                    autohack: { running: false, pid: 0, start: 0 },
+                    stock: { running: false, pid: 0, start: 0 }
                 },
                 errors: [],
                 system: {
-                    healthy: true
+                    healthy: true,
+                    degraded: false,
+                    lastRecovery: 0
+                },
+                errorStats: {
+                    total: 0,
+                    lastErrorTime: 0,
+                    errorRate: 0
                 }
             };
+
+            // 验证配置
+            CONFIG.HACKNET_PRIORITY = CONFIG.HACKNET_PRIORITY.filter(type =>
+                CONFIG.VALID_HACKNET_TYPES.includes(type)
+            );
         }
 
-        // ========== 工具函数 ==========
-        // 来自HNPSmanager.js
-        alignText(text, width, align = 'left', padChar = ' ') {
-            const visibleLength = text.replace(/\x1b\[[0-9;]*m/g, '').length;
-            const padding = Math.max(0, width - visibleLength);
-            switch (align) {
-                case 'left': return text + padChar.repeat(padding);
-                case 'right': return padChar.repeat(padding) + text;
-                case 'center':
-                    const left = Math.floor(padding / 2);
-                    const right = padding - left;
-                    return padChar.repeat(left) + text + padChar.repeat(right);
-                default: return text;
-            }
-        }
-
-        createBoxLine(text) {
-            const border = '─'.repeat(CONFIG.UI_WIDTH - 2);
-            return `┌${border}┐\n` +
-                `│${this.alignText(` ${text} `, CONFIG.UI_WIDTH - 2, 'center')}│\n` +
-                `└${border}┘`;
-        }
-
-        createValueLine(left, right) {
-            const halfWidth = Math.floor(CONFIG.UI_WIDTH / 2);
-            return `${this.alignText(left, halfWidth)} ${this.alignText(right, halfWidth)}`;
-        }
-
-        // 来自manger.js的格式化工具
+        // ========== 格式化工具 ==========
         format = {
             money: amount => {
-                if (amount === undefined || amount === null || isNaN(amount)) {
-                    return "N/A";
-                }
-                const isNegative = amount < 0;
-                const absAmount = Math.abs(amount);
-                let formatted;
-
-                if (absAmount >= 1e12) formatted = `$${this.ns.formatNumber(absAmount / 1e12, 2)}t`;
-                else if (absAmount >= 1e9) formatted = `$${this.ns.formatNumber(absAmount / 1e9, 2)}b`;
-                else if (absAmount >= 1e6) formatted = `$${this.ns.formatNumber(absAmount / 1e6, 2)}m`;
-                else formatted = `$${this.ns.formatNumber(absAmount, 2)}`;
-
-                return isNegative ? `-${formatted}` : formatted;
-            },
-            number: num => {
-                if (num === undefined || num === null || isNaN(num)) {
-                    return "N/A";
-                }
-                return this.ns.formatNumber(num, 2);
+                if (isNaN(amount)) return "N/A";
+                return `$${ns.formatNumber(amount, 2)}`;
             },
             time: seconds => {
-                if (seconds === undefined || seconds === null || isNaN(seconds)) return "N/A";
                 if (seconds === Infinity) return "∞";
-                const days = Math.floor(seconds / 86400);
-                const hours = Math.floor((seconds % 86400) / 3600);
-                const mins = Math.floor((seconds % 3600) / 60);
-                return `${days > 0 ? days + "d " : ""}${hours > 0 ? hours + "h " : ""}${mins}m`;
+                const d = Math.floor(seconds / 86400);
+                const h = Math.floor((seconds % 86400) / 3600);
+                const m = Math.floor((seconds % 3600) / 60);
+                return `${d > 0 ? d + "d " : ""}${h > 0 ? h + "h " : ""}${m}m`;
             },
-            progress: (value, max, width = 20) => {
-                if (value === undefined || max === undefined || isNaN(value) || isNaN(max)) {
-                    return `[${' '.repeat(width)}]`;
-                }
+            progress: (value, max, width = 10) => {
                 const ratio = Math.min(1, Math.max(0, value / max));
-                return `[${'█'.repeat(Math.floor(ratio * width))}${' '.repeat(width - Math.floor(ratio * width))}]`;
+                const filled = Math.floor(ratio * width);
+                return `[${'█'.repeat(filled)}${' '.repeat(width - filled)}]`;
+            },
+            ram: gb => {
+                return `${ns.formatRam(gb, 1).padStart(7, '_')}`;
             }
         };
 
-        // ========== 日志系统 ==========
-        log(level, message) {
-            const timestamp = new Date().toLocaleTimeString();
-            if (level === 'DEBUG' && !CONFIG.DEBUG_MODE) return;
-
-            const levelText = this.alignText(`[${level}]`, 7);
-            this.ns.tprint(`[${timestamp}] ${levelText} ${message}`);
-        }
-
-        // ========== 错误处理 ==========
-        recordError(context, error, severity = ErrorType.FUNCTIONAL, recoverable = true) {
-            const now = Date.now();
-            const errorEntry = {
-                time: new Date().toLocaleTimeString(),
-                timestamp: now,
-                context,
-                message: String(error).substring(0, 200),
-                stack: error.stack ? String(error.stack).substring(0, 300) : undefined,
-                severity,
-                recoverable
-            };
-
-            // 更新错误统计
-            this.state.errorStats.total++;
-            if (this.state.errorStats.lastErrorTime > 0) {
-                const timeSinceLastError = now - this.state.errorStats.lastErrorTime;
-                this.state.errorStats.errorRate = 60000 / Math.max(1000, timeSinceLastError);
-            }
-            this.state.errorStats.lastErrorTime = now;
-
-            // 添加到错误列表
-            this.state.errors.unshift(errorEntry);
-            if (this.state.errors.length > 5) this.state.errors.pop();
-
-            return errorEntry;
-        }
-
-        attemptRecovery() {
-            const now = Date.now();
-            if (now - this.state.system.lastRecovery < 30000) {
-                return false;
-            }
-
-            this.state.system.lastRecovery = now;
-            this.log('SYSTEM', '尝试系统恢复...');
-
-            try {
-                this.state.scripts.autohack.running = false;
-                this.state.scripts.stock.running = false;
-                this.state.scripts.autohack.retries = 0;
-                this.state.scripts.stock.retries = 0;
-
-                this.state.system.healthy = true;
-                this.state.system.degraded = false;
-                this.log('SUCCESS', '系统恢复成功');
-                return true;
-            } catch (e) {
-                this.recordError("系统恢复失败", e, ErrorType.CRITICAL, false);
-                return false;
-            }
-        }
-
-        // ========== 资金管理 ==========
-        get money() { return this.ns.getPlayer().money; }
-
-        updateIncomeStats() {
-            const now = Date.now();
-            const timeDiff = (now - this.stats.lastIncomeCheck) / 1000;
-
-            const currentHashes = this.ns.hacknet.numHashes();
-            const hashDiff = Math.max(0, currentHashes - this.stats.lastHashes);
-            const hacknetIncome = (hashDiff / 4) * 1e6;
-
-            const scriptIncome = (this.ns.getScriptIncome()[0] || 0) * timeDiff;
-
-            const income = hacknetIncome + scriptIncome;
-            if (!isNaN(income)) {
-                this.stats.totalIncome += income;
-            }
-            this.stats.lastIncomeCheck = now;
-            this.stats.lastHashes = currentHashes;
-        }
-
-        getROI() {
-            if (this.stats.totalSpent === 0) return Infinity;
-            return this.ns.formatPercent(this.stats.totalIncome / this.stats.totalSpent, 1);
-        }
-
-        canAfford(cost, divisor = 1) {
-            const available = Math.max(0, this.money - this.reserve);
-            return cost <= (available / Math.max(1, divisor));
-        }
-
-        recordExpense(amount) {
-            this.stats.totalSpent += amount;
-        }
-
-        // ========== Hacknet管理 ==========        
+        // ========== 核心管理功能 ==========
         async manageHacknet() {
             try {
                 const nodeCount = this.ns.hacknet.numNodes();
-                const hashCapacity = this.ns.hacknet.hashCapacity() || 1;
-                const numHashes = this.ns.hacknet.numHashes();
 
-                if (nodeCount === 0 || (nodeCount < 10 && this.canAfford(this.ns.hacknet.getPurchaseNodeCost(), 10))) {
-                    const cost = this.ns.hacknet.getPurchaseNodeCost();
-                    if (this.canAfford(cost) && this.stats.totalIncome > this.stats.totalSpent) {
-                        const index = this.ns.hacknet.purchaseNode();
-                        if (index !== -1) {
-                            this.stats.hacknetNodes++;
-                            this.recordExpense(cost);
-                            this.log('ACTION', `购买节点 #${index} 花费: $${this.ns.formatNumber(cost)} 收入/支出:${this.ns.formatPercent(this.stats.totalIncome / this.stats.totalSpent, 1)}`);
-                        }
+                // 购买新节点
+                if (nodeCount < this.ns.hacknet.maxNumNodes() &&
+                    this.canAfford(this.ns.hacknet.getPurchaseNodeCost())) {
+                    const index = this.ns.hacknet.purchaseNode();
+                    if (index !== -1) {
+                        this.stats.hacknetNodes++;
+                        this.recordExpense(this.ns.hacknet.getPurchaseNodeCost());
                     }
                 }
 
+                // 升级节点
                 const upgradeHandlers = {
                     RAM: {
                         getCost: (i) => this.ns.hacknet.getRamUpgradeCost(i, 1),
@@ -288,35 +155,19 @@ export async function main(ns) {
                 };
 
                 for (let i = 0; i < nodeCount; i++) {
-                    const needCache = (numHashes / hashCapacity) >= CONFIG.HASH_THRESHOLD;
-                    const validTypes = CONFIG.HACKNET_PRIORITY.filter(type =>
-                        CONFIG.VALID_HACKNET_TYPES.includes(type)
-                    );
+                    for (const type of CONFIG.HACKNET_PRIORITY) {
+                        const handler = upgradeHandlers[type];
+                        if (!handler) continue;
 
-                    const upgrades = validTypes.map(type => ({
-                        type,
-                        cost: upgradeHandlers[type].getCost(i),
-                        func: () => upgradeHandlers[type].upgrade(i)
-                    }));
-
-                    if (needCache && upgradeHandlers.Cache) {
-                        upgrades.push({
-                            type: "Cache",
-                            cost: upgradeHandlers.Cache.getCost(i),
-                            func: () => upgradeHandlers.Cache.upgrade(i)
-                        });
-                    }
-
-                    for (const { type, cost, func } of upgrades) {
-                        if (this.canAfford(cost, 20)) {
+                        const cost = handler.getCost(i);
+                        if (this.canAfford(cost)) {
                             const before = this.getNodeStats(i);
-                            func();
+                            handler.upgrade(i);
                             const after = this.getNodeStats(i);
 
                             if (JSON.stringify(before) !== JSON.stringify(after)) {
                                 this.recordExpense(cost);
                                 if (type === "Cache") this.stats.hashCacheUpgrades++;
-                                this.log('INFO', `升级 #${i} ${type}: ${this.formatUpgrade(before, after, type)}`);
                             }
                         }
                     }
@@ -324,6 +175,112 @@ export async function main(ns) {
             } catch (e) {
                 this.recordError("Hacknet管理错误", e, ErrorType.FUNCTIONAL);
             }
+        }
+
+        async manageServers() {
+            try {
+                const servers = this.ns.getPurchasedServers();
+                const bestRam = this.getBestRamSize();
+
+                // 购买新服务器
+                if (servers.length < CONFIG.MAX_SERVERS &&
+                    bestRam >= CONFIG.MIN_RAM &&
+                    this.canAfford(this.ns.getPurchasedServerCost(bestRam))) {
+
+                    const hostname = this.ns.purchaseServer(
+                        CONFIG.SERVER_PREFIX + servers.length,
+                        bestRam
+                    );
+
+                    if (hostname) {
+                        this.stats.serversPurchased++;
+                        this.recordExpense(this.ns.getPurchasedServerCost(bestRam));
+                    }
+                }
+
+                // 升级现有服务器
+                for (const hostname of servers) {
+                    const currentRam = this.ns.getServerMaxRam(hostname);
+                    if (currentRam < bestRam &&
+                        this.canAfford(this.ns.getPurchasedServerCost(bestRam))) {
+
+                        this.ns.killall(hostname);
+                        if (this.ns.deleteServer(hostname)) {
+                            const newHost = this.ns.purchaseServer(
+                                hostname.replace(/\d+$/, '') || CONFIG.SERVER_PREFIX,
+                                bestRam
+                            );
+
+                            if (newHost) {
+                                this.stats.serversUpgraded++;
+                                this.recordExpense(this.ns.getPurchasedServerCost(bestRam));
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                this.recordError("服务器管理错误", e, ErrorType.FUNCTIONAL);
+            }
+        }
+
+        async manageScripts() {
+            try {
+                // 更新玩家状态
+                this.state.player.hacking = this.ns.getHackingLevel();
+                this.state.player.money = this.ns.getPlayer().money;
+
+                // 管理自动黑客脚本
+                const shouldRunAutohack = this.state.player.hacking < CONFIG.SCRIPTS.autohack.minHackingLevel;
+                if (shouldRunAutohack !== this.state.scripts.autohack.running) {
+                    if (shouldRunAutohack) {
+                        const pid = this.ns.run(CONFIG.SCRIPTS.autohack.path);
+                        if (pid) {
+                            this.state.scripts.autohack = {
+                                running: true,
+                                pid,
+                                start: Date.now()
+                            };
+                        }
+                    } else {
+                        this.ns.kill(this.state.scripts.autohack.pid);
+                        this.state.scripts.autohack.running = false;
+                    }
+                }
+
+                // 管理股票脚本
+                if (this.state.stock.has4SData && !this.state.scripts.stock.running) {
+                    const pid = this.ns.run(CONFIG.SCRIPTS.stock.path);
+                    if (pid) {
+                        this.state.scripts.stock = {
+                            running: true,
+                            pid,
+                            start: Date.now()
+                        };
+                    }
+                }
+            } catch (e) {
+                this.recordError("脚本管理错误", e, ErrorType.FUNCTIONAL);
+            }
+        }
+
+        // ========== 辅助方法 ==========
+        get money() { return this.ns.getPlayer().money; }
+
+        getBestRamSize() {
+            let ram = CONFIG.MIN_RAM;
+            while (ram <= 2 ** 20 && this.canAfford(this.ns.getPurchasedServerCost(ram * 2), 10)) {
+                ram *= 2;
+            }
+            return ram;
+        }
+
+        canAfford(cost, divisor = 1) {
+            const available = Math.max(0, this.money - this.reserve);
+            return cost <= (available / Math.max(1, divisor));
+        }
+
+        recordExpense(amount) {
+            this.stats.totalSpent += amount;
         }
 
         getNodeStats(index) {
@@ -336,259 +293,121 @@ export async function main(ns) {
             };
         }
 
-        formatUpgrade(before, after, type) {
-            switch (type) {
-                case "RAM": return `${before.ram}GB → ${after.ram}GB`;
-                case "Core": return `${before.cores}核 → ${after.cores}核`;
-                case "Level": return `Lv.${before.level} → Lv.${after.level}`;
-                case "Cache": return `${before.cache} → ${after.cache}`;
-                default: return "";
-            }
+        getROI() {
+            return this.stats.totalSpent > 0 ?
+                (this.stats.totalIncome / this.stats.totalSpent).toFixed(2) + "x" : "-";
         }
 
-        // ========== 服务器管理 ==========
-        async manageServers() {
-            try {
-                const bestRam = this.getBestRamSize();
-                const servers = this.ns.getPurchasedServers();
+        recordError(context, error, severity = ErrorType.FUNCTIONAL) {
+            const errorEntry = {
+                time: new Date().toLocaleTimeString(),
+                timestamp: Date.now(),
+                context,
+                message: String(error).slice(0, 100),
+                severity
+            };
 
-                if (servers.length < CONFIG.MAX_SERVERS && bestRam >= CONFIG.MIN_RAM) {
-                    const cost = this.ns.getPurchasedServerCost(bestRam);
-                    if (this.canAfford(cost)) {
-                        const hostname = this.ns.purchaseServer(CONFIG.SERVER_PREFIX, bestRam);
-                        if (hostname) {
-                            this.stats.serversPurchased++;
-                            this.recordExpense(cost);
-                            this.log('ACTION', `新购 ${hostname} (${this.ns.formatRam(bestRam)}) 花费: $${this.ns.formatNumber(cost)}`);
-                        }
-                    }
-                }
-
-                for (const hostname of servers) {
-                    const currentRam = this.ns.getServerMaxRam(hostname);
-                    if (currentRam < bestRam) {
-                        const cost = this.ns.getPurchasedServerCost(bestRam);
-                        if (this.canAfford(cost)) {
-                            this.ns.killall(hostname);
-                            if (this.ns.deleteServer(hostname)) {
-                                const newHost = this.ns.purchaseServer(CONFIG.SERVER_PREFIX, bestRam);
-                                if (newHost) {
-                                    this.stats.serversUpgraded++;
-                                    this.recordExpense(cost);
-                                    this.log('INFO', `升级 ${hostname} → ${newHost} (${this.ns.formatRam(currentRam)}→${this.ns.formatRam(bestRam)})`);
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (e) {
-                this.recordError("服务器管理错误", e, ErrorType.FUNCTIONAL);
-            }
+            this.state.errors.unshift(errorEntry);
+            if (this.state.errors.length > 3) this.state.errors.pop();
+            this.state.errorStats.total++;
+            this.state.errorStats.lastErrorTime = Date.now();
         }
 
-        getBestRamSize() {
-            let ram = CONFIG.MIN_RAM;
-            while (ram <= 2 ** 20 && this.canAfford(this.ns.getPurchasedServerCost(ram * 2), 10)) {
-                ram *= 2;
-            }
-            return ram;
-        }
-
-        // ========== 脚本管理 ==========
-        async manageScripts() {
-            if (!this.state.system.healthy) return false;
-
-            try {
-                // 更新玩家数据
-                this.state.player.hacking = this.ns.getHackingLevel();
-                this.state.player.money = this.ns.getPlayer().money;
-
-                // 管理自动黑客脚本
-                const shouldRunAutohack = this.state.player.hacking < CONFIG.SCRIPTS.autohack.minHackingLevel;
-                if (shouldRunAutohack !== this.state.scripts.autohack.running) {
-                    try {
-                        if (shouldRunAutohack) {
-                            const pid = await this.ns.run(CONFIG.SCRIPTS.autohack.path);
-                            this.state.scripts.autohack.running = pid !== 0;
-                            if (this.state.scripts.autohack.running) {
-                                this.state.scripts.autohack.retries = 0;
-                                this.state.scripts.autohack.lastError = null;
-                            }
-                        } else {
-                            this.ns.scriptKill(CONFIG.SCRIPTS.autohack.path, this.ns.getHostname());
-                            this.state.scripts.autohack.running = false;
-                        }
-                    } catch (e) {
-                        this.state.scripts.autohack.retries++;
-                        this.state.scripts.autohack.lastError = e;
-                        this.recordError("自动黑客脚本管理错误", e,
-                            this.state.scripts.autohack.retries >= CONFIG.ERROR.MAX_RETRIES ?
-                                ErrorType.FUNCTIONAL : ErrorType.TRANSIENT);
-                    }
-                }
-
-                // 管理股票脚本(条件满足后永久运行)
-                if (!this.state.scripts.stock.running) {
-                    const shouldRunStock = this.state.stock.has4SData;
-                    if (shouldRunStock) {
-                        try {
-                            const pid = await this.ns.run(CONFIG.SCRIPTS.stock.path);
-                            this.state.scripts.stock.running = pid !== 0;
-                            if (this.state.scripts.stock.running) {
-                                this.state.scripts.stock.retries = 0;
-                                this.state.scripts.stock.lastError = null;
-                            }
-                        } catch (e) {
-                            this.state.scripts.stock.retries++;
-                            this.state.scripts.stock.lastError = e;
-                            this.recordError("股票脚本管理错误", e,
-                                this.state.scripts.stock.retries >= CONFIG.ERROR.MAX_RETRIES ?
-                                    ErrorType.FUNCTIONAL : ErrorType.TRANSIENT);
-                        }
-                    }
-                }
-
-                return true;
-            } catch (e) {
-                this.recordError("脚本管理严重错误", e, ErrorType.CRITICAL);
-                return false;
-            }
-        }
-
-        // ========== 界面渲染 ==========
+        // ========== 用户界面 ==========
         renderUI() {
             try {
                 this.ns.clearLog();
+                const ui = [];
 
-                // UI框架 - 顶部状态栏
-                const divider = '━'.repeat(CONFIG.UI_WIDTH - 2);
-                this.ns.print(`┌${divider}┐`);
+                // 系统状态头
+                const statusColor = !this.state.system.healthy ? "\x1b[38;5;196m" :
+                    this.state.system.degraded ? "\x1b[38;5;220m" : "\x1b[38;5;46m";
+                ui.push(`\x1b[38;5;21m${'≡'.repeat(CONFIG.UI_WIDTH)}\x1b[0m`);
+                ui.push(`${statusColor}▶ CyberManager \x1b[38;5;33mv1.2\x1b[0m | ` +
+                    `循环: \x1b[1m${this.loopCount}\x1b[0m | 运行: ${this.format.time((Date.now() - this.startTime) / 1000)}`);
 
-                const statusColor = !this.state.system.healthy ? "\x1b[31m" :
-                    this.state.system.degraded ? "\x1b[33m" : "\x1b[32m";
-                const statusMsg = !this.state.system.healthy ? "● CRITICAL" :
-                    this.state.system.degraded ? "⚠ DEGRADED" : "✔ NORMAL";
+                // 资金面板
+                const moneyPanel = [
+                    `\x1b[38;5;51m● 资金\x1b[0m 可用:\x1b[3${this.money > 1e9 ? 2 : 3}m${this.format.money(this.money)}\x1b[0m`,
+                    `保留:\x1b[38;5;214m${this.format.money(this.reserve)}\x1b[0m`,
+                    `ROI:${this.getROI().includes('-') ? '\x1b[31m' : '\x1b[32m'}${this.getROI()}\x1b[0m`
+                ];
+                ui.push(moneyPanel.join(' | '));
 
-                this.ns.print(`│${statusColor} ${'CyberManager Plus v1.0'.padEnd(CONFIG.UI_WIDTH - 11)} ` +
-                    `[${statusMsg}]\x1b[0m │`);
-                this.ns.print(`└${divider}┘`);
+                // Hacknet面板
+                const hashPercent = this.ns.hacknet.numHashes() / Math.max(1, this.ns.hacknet.hashCapacity());
+                ui.push([
+                    `\x1b[38;5;93m● Hacknet\x1b[0m 节点:${this.stats.hacknetNodes}`,
+                    `缓存:${this.format.progress(hashPercent, 1, 12)}`,
+                    `效率:${(hashPercent * 100).toFixed(1)}%`
+                ].join(' | '));
 
-                // 资金状态 - 带图标和分隔线
-                this.ns.print(this.createBoxLine('💰 资金状态'));
-                const moneyDiv = '─'.repeat(CONFIG.UI_WIDTH);
-                this.ns.print(moneyDiv);
-                const availableMoney = this.money - this.reserve;
-                const moneyColor = availableMoney > 1e9 ? "\x1b[32m" : "\x1b[33m";
-                this.ns.print(this.createValueLine(
-                    `可用: ${moneyColor}${this.format.money(availableMoney)}\x1b[0m`,
-                    `保留: ${this.format.money(this.reserve)}`
-                ));
-                this.ns.print(this.createValueLine(
-                    `收入率: ${this.format.money(this.state.player.incomeRate)}/s`,
-                    `总资产: ${moneyColor}${this.format.money(availableMoney + this.reserve)}\x1b[0m`
-                ));
-
-                // Hacknet状态 - 增强显示
-                this.ns.print(this.createBoxLine('⚙️ Hacknet节点'));
-                const nodes = this.ns.hacknet.numNodes();
-                const hashes = this.ns.hacknet.numHashes();
-                const hashCap = Math.max(1, this.ns.hacknet.hashCapacity());
-                const hashPercent = (hashes / hashCap * 100).toFixed(1);
-                const hashColor = hashes / hashCap > 0.9 ? "\x1b[31m" :
-                    hashes / hashCap > 0.7 ? "\x1b[33m" : "\x1b[32m";
-                this.ns.print(this.createValueLine(
-                    `节点: ${nodes}`,
-                    `哈希: ${hashColor}${hashPercent}%\x1b[0m`
-                ));
-                this.ns.print(this.createValueLine(
-                    `缓存: ${this.ns.formatNumber(hashes)}/${this.ns.formatNumber(hashCap)}`,
-                    `效率: ${this.format.progress(hashes, hashCap)}`
-                ));
-
-                // 服务器状态 - 紧凑布局
-                this.ns.print(this.createBoxLine('🖥️ 服务器集群'));
+                // 服务器面板
                 const servers = this.ns.getPurchasedServers();
-                const ramColor = this.getBestRamSize() >= 2 ** 20 ? "\x1b[32m" : "\x1b[33m";
-                this.ns.print(this.createValueLine(
-                    `数量: ${servers.length}/${CONFIG.MAX_SERVERS}`,
-                    `最佳RAM: ${ramColor}${this.ns.formatRam(this.getBestRamSize())}\x1b[0m`
-                ));
+                const ramLevel = Math.log2(this.getBestRamSize());
+                ui.push([
+                    `\x1b[38;5;208m● 服务器\x1b[0m 数量:${servers.length}/${CONFIG.MAX_SERVERS}`,
+                    `RAM等级:\x1b[38;5;${ramLevel > 10 ? 46 : ramLevel > 5 ? 226 : 196}m${ramLevel}\x1b[0m`,
+                    `最大:${this.format.ram(this.getBestRamSize())}`
+                ].join(' | '));
 
-                // 脚本状态 - 添加运行状态颜色
-                this.ns.print(this.createBoxLine('📜 脚本状态'));
-                const autohackColor = this.state.scripts.autohack.running ? "\x1b[32m" : "\x1b[31m";
-                const stockColor = this.state.scripts.stock.running ? "\x1b[32m" : "\x1b[31m";
-                this.ns.print(this.createValueLine(
-                    `自动黑客: ${autohackColor}${this.state.scripts.autohack.running ? '运行中' : '已停止'}\x1b[0m`,
-                    `股票脚本: ${stockColor}${this.state.scripts.stock.running ? '运行中' : '已停止'}\x1b[0m`
-                ));
+                // 脚本面板
+                const scriptStatus = [];
+                const addScriptStatus = (name, data) => {
+                    const color = data.running ? 46 : 196;
+                    const runtime = data.running ? this.format.time((Date.now() - data.start) / 1000) : '停止';
+                    scriptStatus.push(`\x1b[38;5;${color}m${name}\x1b[0m:${runtime}`);
+                };
+                addScriptStatus('自动黑客', this.state.scripts.autohack);
+                addScriptStatus('股票交易', this.state.scripts.stock);
+                ui.push(`\x1b[38;5;99m● 脚本\x1b[0m ${scriptStatus.join(' | ')}`);
 
-                // 统计信息 - 紧凑布局
-                this.ns.print(this.createBoxLine('📊 系统统计'));
-                this.ns.print(this.createValueLine(
-                    `节点: ${this.stats.hacknetNodes}`,
-                    `缓存升级: ${this.stats.hashCacheUpgrades}`
-                ));
-                this.ns.print(this.createValueLine(
-                    `新购服务器: ${this.stats.serversPurchased}`,
-                    `升级次数: ${this.stats.serversUpgraded}`
-                ));
-                const roiColor = this.getROI() > 1 ? "\x1b[32m" : "\x1b[31m";
-                this.ns.print(this.createValueLine(
-                    `支出: $${this.ns.formatNumber(this.stats.totalSpent)}`,
-                    `收入: $${this.ns.formatNumber(this.stats.totalIncome)}`
-                ));
-                this.ns.print(this.createValueLine(
-                    `ROI: ${roiColor}${this.getROI()}\x1b[0m`,
-                    `循环: ${this.loopCount}`
-                ));
-
-                // 错误信息 - 增强显示
+                // 错误信息
                 if (this.state.errors.length > 0) {
-                    this.ns.print(this.createBoxLine('⚠️ 最近错误'));
                     const lastError = this.state.errors[0];
-                    const severityColor = lastError.severity === 0 ? "\x1b[31m" :
-                        lastError.severity === 1 ? "\x1b[33m" : "\x1b[36m";
-                    const severityText = ["严重", "功能", "临时", "警告"][lastError.severity] || "未知";
-                    this.ns.print(this.createValueLine(
-                        `${severityColor}${lastError.time} [${severityText}]\x1b[0m`,
-                        `${lastError.context.substring(0, 18)}...`
-                    ));
+                    const color = [196, 208, 220, 226][lastError.severity];
+                    ui.push(`\x1b[38;5;${color}m⚠ ${lastError.context}: ${lastError.message}\x1b[0m`);
                 }
 
+                // 底部状态栏
+                const health = this.state.system.healthy ? 46 : this.state.system.degraded ? 226 : 196;
+                ui.push(`\x1b[48;5;17m\x1b[38;5;${health}m${'■'.repeat(CONFIG.UI_WIDTH)}\x1b[0m`);
+
+                this.ns.print(ui.join('\n'));
             } catch (e) {
                 this.recordError("UI渲染错误", e, ErrorType.WARNING);
             }
         }
     }
 
-    // ====================== 主循环 ======================
+    // ====================== 主程序 ======================
     const manager = new SystemManager(ns);
+    ns.disableLog('ALL');
+    ns.ui.openTail();
     ns.atExit(() => {
         ns.scriptKill(CONFIG.SCRIPTS.autohack.path, ns.getHostname());
         ns.scriptKill(CONFIG.SCRIPTS.stock.path, ns.getHostname());
     });
-    ns.disableLog('ALL');
-    ns.ui.openTail();
-    manager.log('SYSTEM', '系统初始化完成');
-    manager.log('INFO', `保留资金: $${manager.ns.formatNumber(manager.reserve)}`);
 
     while (true) {
-        const startTime = Date.now();
         manager.loopCount++;
 
+        // 更新收入统计
+        const now = Date.now();
+        const timeDiff = (now - manager.stats.lastIncomeCheck) / 1000;
+        const currentHashes = ns.hacknet.numHashes();
+        const hashIncome = ((currentHashes - manager.stats.lastHashes) / 4) * 1e6;
+        const scriptIncome = ns.getScriptIncome()[0] * timeDiff;
+        manager.stats.totalIncome += hashIncome + scriptIncome;
+        manager.stats.lastIncomeCheck = now;
+        manager.stats.lastHashes = currentHashes;
+
+        // 执行管理任务
         await manager.manageHacknet();
         await manager.manageServers();
         await manager.manageScripts();
-        manager.updateIncomeStats();
         manager.renderUI();
-
-        const loopTime = Date.now() - startTime;
-        if (loopTime > CONFIG.UPDATE_INTERVAL * 1.2) {
-            manager.log('WARN', `循环耗时 ${loopTime}ms (预期: ${CONFIG.UPDATE_INTERVAL}ms)`);
-        }
 
         await ns.sleep(CONFIG.UPDATE_INTERVAL);
     }
 }
-// ====================== 结束 ======================
