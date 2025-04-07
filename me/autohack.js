@@ -93,28 +93,28 @@ export async function main(ns) {
         }
 
         // 常用统计信息的快捷访问方法
-        getMaxMoney(host) {
+        getMaxMoney(host) { // 获取最大资金
             return this._getCachedStat(host, 'maxMoney', () => this.ns.getServerMaxMoney(host));
         }
-        getMoneyAvailable(host) {
+        getMoneyAvailable(host) { // 获取可用资金
             return this._getCachedStat(host, 'moneyAvailable', () => this.ns.getServerMoneyAvailable(host));
         }
-        getMaxRam(host) {
+        getMaxRam(host) {   // 获取最大RAM  
             return this._getCachedStat(host, 'maxRam', () => this.ns.getServerMaxRam(host));
         }
-        getUsedRam(host) {
+        getUsedRam(host) {  // 获取已用RAM
             return this._getCachedStat(host, 'usedRam', () => this.ns.getServerUsedRam(host));
         }
-        getPortsRequired(host) {
+        getPortsRequired(host) {    // 获取所需端口数
             return this._getCachedStat(host, 'portsRequired', () => this.ns.getServerNumPortsRequired(host));
         }
-        getRequiredHackingLevel(host) {
+        getRequiredHackingLevel(host) { // 获取所需破解等级
             return this._getCachedStat(host, 'requiredHackingLevel', () => this.ns.getServerRequiredHackingLevel(host));
         }
-        getSecurityLevel(host) {
+        getSecurityLevel(host) {      // 获取安全等级
             return this._getCachedStat(host, 'securityLevel', () => this.ns.getServerSecurityLevel(host));
         }
-        getMinSecurityLevel(host) {
+        getMinSecurityLevel(host) { // 获取最小安全等级
             return this._getCachedStat(host, 'minSecurityLevel', () => this.ns.getServerMinSecurityLevel(host));
         }
 
@@ -159,8 +159,8 @@ export async function main(ns) {
     const LOG_SETTINGS = {
         level: 3,                    // 日志级别 1-ERROR, 2-INFO, 3-DEBUG
         tabWidth: 1,                 // 制表符宽度(字符数)
-        setLevel: (lvl) => LOG_SETTINGS.level = lvl,
-        setTabWidth: (width) => LOG_SETTINGS.tabWidth = Math.max(1, width)
+        setLevel: (lvl) => LOG_SETTINGS.level = lvl, // 设置日志级别
+        setTabWidth: (width) => LOG_SETTINGS.tabWidth = Math.max(1, width) // 设置制表符宽度
     };
 
     // 预计算表格边框模板
@@ -289,13 +289,13 @@ export async function main(ns) {
                         const moneyCurrent = serverInfo.getMoneyAvailable(server);
                         const securityCurrent = serverInfo.getSecurityLevel(server);
                         const playerHackLevel = ns.getHackingLevel();
-                        
+
                         // 综合评分公式
-                        const score = 
+                        const score =
                             (moneyCurrent / serverObj.moneyMax * serverObj.moneyMax) * 0.6 +  // 当前资金潜力
                             (1 / (securityCurrent - serverObj.minDifficulty + 1)) * 0.3 +     // 安全系数
                             (1 / (serverObj.requiredHackingSkill - playerHackLevel + 10)) * 0.1;  // 等级匹配度
-                        
+
                         targets.push([score, server]);
                     }
 
@@ -303,7 +303,7 @@ export async function main(ns) {
                     if (serverObj.maxRam > 4 && !EXCLUDE.includes(server)) {
                         hosts.push([serverObj.maxRam, server]);
                     }
-
+                    // 复制脚本到目标服务器
                     servers.push(server);
                     try {
                         ns.scp(FILES, server, 'home');
