@@ -286,10 +286,17 @@ export async function main(ns) {
                     if (serverObj.moneyMax > 0 &&
                         serverObj.requiredHackingSkill <= ns.getHackingLevel() &&
                         serverObj.minDifficulty < 100) {
-                        targets.push([
-                            Math.floor(serverObj.moneyMax / serverObj.minDifficulty),
-                            server
-                        ]);
+                        const moneyCurrent = serverInfo.getMoneyAvailable(server);
+                        const securityCurrent = serverInfo.getSecurityLevel(server);
+                        const playerHackLevel = ns.getHackingLevel();
+                        
+                        // 综合评分公式
+                        const score = 
+                            (moneyCurrent / serverObj.moneyMax * serverObj.moneyMax) * 0.6 +  // 当前资金潜力
+                            (1 / (securityCurrent - serverObj.minDifficulty + 1)) * 0.3 +     // 安全系数
+                            (1 / (serverObj.requiredHackingSkill - playerHackLevel + 10)) * 0.1;  // 等级匹配度
+                        
+                        targets.push([score, server]);
                     }
 
                     // 收集可用主机
