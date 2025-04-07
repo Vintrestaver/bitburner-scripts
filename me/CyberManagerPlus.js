@@ -275,7 +275,7 @@ export async function main(ns) {
             return ram;
         }
 
-        canAfford(cost, divisor = 1) {
+        canAfford(cost, divisor = 20) {
             const available = Math.max(0, this.money - this.reserve);
             return cost <= (available / Math.max(1, divisor));
         }
