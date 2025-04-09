@@ -1,5 +1,5 @@
 /**
- * Bitburner 帮派管理系统 v5.2
+ * Bitburner 帮派管理系统 v5.5
  * 优化版本 - 提升性能并增强功能
  * @param {NS} ns
  **/
@@ -16,16 +16,16 @@ export async function main(ns) {
       MANUAL: "Manual/NotReallyTaskName"
     },
     THRESHOLDS: {
-      ASCEND_ON_MPL: 10,
-      MIN_ASCEND_MULT: 1.15,
-      EQUIP_AFFORD_COEFF: 100,
-      STATS_THRESHOLD: 0.7,
-      STATS_HARD_MIN: 200,
-      TRAIN_CHANCE: 0.2,
-      RESPECT_MIN: 2e6,
-      WANTED_PENALTY: 0.99,
-      WARFARE_RATIO: 2,
-      MEMBERS: { MIN: 6, MAX: 12 },
+      ASCEND_ON_MPL: 10, // 达到10级升阶
+      MIN_ASCEND_MULT: 1.15, // 最小升阶倍率
+      EQUIP_AFFORD_COEFF: 100, // 装备购买预算系数
+      STATS_THRESHOLD: 0.7, // 70% 统计阈值
+      STATS_HARD_MIN: 200, // 200 强统计阈值
+      TRAIN_CHANCE: 0.2, // 20% 训练概率
+      RESPECT_MIN: 2e6, // 200万 声望阈值
+      WANTED_PENALTY: 0.99, // 99% 通缉惩罚
+      WARFARE_RATIO: 2, // 2:1 战争比例
+      MEMBERS: { MIN: 6, MAX: 12 }, // 6-12 成员数量
       CACHE_DURATION: 1000, // 缓存持续时间(ms)
       ERROR_RETRY_DELAY: 5000, // 错误重试延迟(ms)
       MAX_RETRIES: 3 // 最大重试次数
@@ -33,9 +33,9 @@ export async function main(ns) {
     UI: {
       SLEEP_TIME: 1000,
       CYCLE: ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
-      WANTED_MAX_LEVEL: 10,
-      EQUIP_SLOTS: 23,
-      WINDOW: { W: 660, H: 515 }
+      WANTED_MAX_LEVEL: 10, // 通缉等级上限
+      EQUIP_SLOTS: 23, // 装备栏位数量
+      WINDOW: { W: 660, H: 515 } // 窗口大小
     }
   };
 
@@ -44,12 +44,23 @@ export async function main(ns) {
     static data = new Map();
     static timestamps = new Map();
     static dependencies = new Map();
+    static cacheDurations = {
+      gangInfo: 10000,      // 10秒
+      members: 30000,       // 30秒
+      memberDetails: 30000, // 30秒
+      equipment: 3600000,   // 1小时
+      metrics: 5000,        // 5秒
+      default: 1000         // 1秒
+    };
 
     static get(key) {
       const timestamp = this.timestamps.get(key);
-      if (timestamp && Date.now() - timestamp < CONFIG.THRESHOLDS.CACHE_DURATION) {
+      const duration = this.cacheDurations[key] || this.cacheDurations.default;
+      if (timestamp && Date.now() - timestamp < duration) {
+        PerformanceMonitor.trackCacheHit();
         return this.data.get(key);
       }
+      PerformanceMonitor.trackCacheMiss();
       return null;
     }
 
@@ -140,6 +151,53 @@ export async function main(ns) {
       };
     }
 
+    static analyzeEquipment(ns) {
+      const equipmentList = ns.gang.getEquipmentNames();
+      const members = ns.gang.getMemberNames();
+      const results = [];
+
+      for (const equip of equipmentList) {
+        const cost = ns.gang.getEquipmentCost(equip);
+        if (cost <= 0) continue;
+
+        // 计算平均属性增益
+        let totalGain = 0;
+        let sampleCount = 0;
+
+        for (const member of members) {
+          const before = ns.gang.getMemberInformation(member);
+          if (before.upgrades.includes(equip) || before.augmentations.includes(equip)) {
+            continue;
+          }
+
+          // 模拟购买装备
+          ns.gang.purchaseEquipment(member, equip);
+          const after = ns.gang.getMemberInformation(member);
+          ns.gang.purchaseEquipment(member, equip); // 撤销购买
+
+          const gain = (after.str - before.str) +
+            (after.def - before.def) +
+            (after.dex - before.dex) +
+            (after.agi - before.agi);
+
+          totalGain += gain;
+          sampleCount++;
+        }
+
+        if (sampleCount > 0) {
+          const avgGain = totalGain / sampleCount;
+          results.push({
+            name: equip,
+            cost,
+            value: avgGain / cost,
+            gain: avgGain
+          });
+        }
+      }
+
+      return results.sort((a, b) => b.value - a.value);
+    }
+
     static getTaskEfficiency(ns) {
       const efficiency = new Map();
       const members = ns.gang.getMemberNames();
@@ -210,14 +268,21 @@ export async function main(ns) {
     }
   }
 
-  // ===================== 性能监控系统 =====================
+  // ===================== 增强版性能监控系统 =====================
   class PerformanceMonitor {
     static metrics = {
       apiCalls: 0,
       cacheHits: 0,
       cacheMisses: 0,
       errors: 0,
-      lastReset: Date.now()
+      lastReset: Date.now(),
+      apiCallTimestamps: [],
+      warningCount: 0
+    };
+
+    static RATE_LIMITS = {
+      MAX_API_CALLS_PER_SECOND: 20,
+      WARNING_THRESHOLD: 5
     };
 
     static trackApiCall() {
@@ -557,10 +622,35 @@ export async function main(ns) {
         `Equ:${equipmentCoverage.padEnd(6)} | ` +
         `Wan:${ns.formatNumber(peakWantedLevel, 1).padEnd(6)}             ║`);
 
+      // 显示装备分析
+      this.#renderEquipmentAnalysis(ns);
+
       // 显示任务效率分析
       this.#renderTaskEfficiency(ns);
 
       ns.print('╚═════════════════════════════════════════════════════════════════╝');
+    }
+
+    /** 装备分析 */
+    static #renderEquipmentAnalysis(ns) {
+      try {
+        const equipment = StatsTracker.analyzeEquipment(ns);
+        if (!equipment || equipment.length === 0) return;
+
+        // 只显示前3个性价比最高的装备
+        const topEquip = equipment.slice(0, 3);
+
+        ns.print('╠═════════════════════════════════════════════════════════════════╣');
+        ns.print('║ 装备性价比分析:                                                  ║');
+
+        topEquip.forEach(item => {
+          const val = ns.formatNumber(item.value, 3).padStart(6);
+          const cost = ns.formatNumber(item.cost, 1).padStart(8);
+          ns.print(`║ ${item.name.padEnd(22)} 性价比: ${val} | 成本: ${cost}$ ║`);
+        });
+      } catch (e) {
+        ns.print(`║ 装备分析失败: ${e.message.substring(0, 50)} ║`);
+      }
     }
 
     /** 任务效率分析 */
@@ -597,6 +687,7 @@ export async function main(ns) {
     cycle: 0,
     autoTasks: new Map(),
     lastAscend: Date.now() - 120000,
+    lastEquipmentAnalysis: Date.now() - 3600000, // 上次装备分析时间
     metrics: {
       totalRespect: 0,
       combatEfficiency: 0,
@@ -608,7 +699,7 @@ export async function main(ns) {
   // ===================== 初始化流程 =====================
   const initialize = (ns) => {
     ns.disableLog('ALL');
-    ns.ui.setTailTitle(`GangManager v5.2 [${ns.getScriptName()}]`);
+    ns.ui.setTailTitle(`GangManager v5.5 [${ns.getScriptName()}]`);
     ns.ui.openTail();
     ns.ui.moveTail(1000, 100);
 
