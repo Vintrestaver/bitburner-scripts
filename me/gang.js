@@ -97,6 +97,119 @@ export async function main(ns) {
     }
   }
 
+  // ===================== 统计跟踪系统 =====================
+  class StatsTracker {
+    static history = new Map();
+    static lastUpdate = Date.now();
+
+    static recordMemberStats(ns, member) {
+      const info = ns.gang.getMemberInformation(member);
+      const stats = {
+        str: info.str,
+        def: info.def,
+        dex: info.dex,
+        agi: info.agi,
+        task: info.task,
+        time: Date.now()
+      };
+
+      if (!this.history.has(member)) {
+        this.history.set(member, []);
+      }
+      this.history.get(member).push(stats);
+
+      // 保留最近100条记录
+      if (this.history.get(member).length > 100) {
+        this.history.get(member).shift();
+      }
+    }
+
+    static getGrowthRate(member) {
+      const records = this.history.get(member) || [];
+      if (records.length < 2) return null;
+
+      const first = records[0];
+      const last = records[records.length - 1];
+      const duration = (last.time - first.time) / 3600000; // 小时
+
+      return {
+        str: (last.str - first.str) / duration,
+        def: (last.def - first.def) / duration,
+        dex: (last.dex - first.dex) / duration,
+        agi: (last.agi - first.agi) / duration
+      };
+    }
+
+    static getTaskEfficiency(ns) {
+      const efficiency = new Map();
+      const members = ns.gang.getMemberNames();
+
+      // 分析每个成员的任务历史
+      for (const member of members) {
+        const records = this.history.get(member) || [];
+        if (records.length < 2) continue;
+
+        // 按任务类型分组
+        const taskGroups = new Map();
+        for (let i = 1; i < records.length; i++) {
+          const prev = records[i - 1];
+          const curr = records[i];
+          const task = prev.task;
+
+          if (!taskGroups.has(task)) {
+            taskGroups.set(task, {
+              count: 0,
+              strGain: 0,
+              defGain: 0,
+              dexGain: 0,
+              agiGain: 0,
+              duration: 0
+            });
+          }
+
+          const group = taskGroups.get(task);
+          group.count++;
+          group.strGain += curr.str - prev.str;
+          group.defGain += curr.def - prev.def;
+          group.dexGain += curr.dex - prev.dex;
+          group.agiGain += curr.agi - prev.agi;
+          group.duration += curr.time - prev.time;
+        }
+
+        // 计算每个任务类型的平均效率
+        for (const [task, data] of taskGroups) {
+          const hours = data.duration / 3600000;
+          const avgGain = (data.strGain + data.defGain + data.dexGain + data.agiGain) / 4;
+
+          if (!efficiency.has(task)) {
+            efficiency.set(task, {
+              totalGain: 0,
+              totalHours: 0,
+              memberCount: 0
+            });
+          }
+
+          const taskEff = efficiency.get(task);
+          taskEff.totalGain += avgGain;
+          taskEff.totalHours += hours;
+          taskEff.memberCount++;
+        }
+      }
+
+      // 计算总体任务效率
+      const result = [];
+      for (const [task, data] of efficiency) {
+        result.push({
+          task,
+          efficiency: data.totalGain / data.totalHours,
+          popularity: data.memberCount / members.length
+        });
+      }
+
+      return result.sort((a, b) => b.efficiency - a.efficiency);
+    }
+  }
+
   // ===================== 性能监控系统 =====================
   class PerformanceMonitor {
     static metrics = {
@@ -439,11 +552,37 @@ export async function main(ns) {
       const equipmentCoverage = metrics.equipmentCoverage ? ns.formatPercent(metrics.equipmentCoverage, 1) : '0%';
       const peakWantedLevel = metrics.peakWantedLevel ? metrics.peakWantedLevel.toFixed(1) : '0.0';
 
-      ns.print(`║ Respect: ${totalRespect} | ` +
-        `Combat: ${combatEfficiency} | ` +
-        `Equipment: ${equipmentCoverage} | ` +
-        `Peak Wanted: ${peakWantedLevel} ║`);
+      ns.print(`║ Res:${totalRespect.padEnd(7)} | ` +
+        `Com:${combatEfficiency.padEnd(7)} | ` +
+        `Equ:${equipmentCoverage.padEnd(6)} | ` +
+        `Wan:${ns.formatNumber(peakWantedLevel, 1).padEnd(6)}             ║`);
+
+      // 显示任务效率分析
+      this.#renderTaskEfficiency(ns);
+
       ns.print('╚═════════════════════════════════════════════════════════════════╝');
+    }
+
+    /** 任务效率分析 */
+    static #renderTaskEfficiency(ns) {
+      try {
+        const efficiency = StatsTracker.getTaskEfficiency(ns);
+        if (!efficiency || efficiency.length === 0) return;
+
+        // 只显示前3个最高效的任务
+        const topTasks = efficiency.slice(0, 3);
+
+        ns.print('╠═════════════════════════════════════════════════════════════════╣');
+        ns.print('║ 任务效率分析:                                                     ║');
+
+        topTasks.forEach(task => {
+          const eff = ns.formatNumber(task.efficiency, 2).padStart(7);
+          const pop = ns.formatPercent(task.popularity, 0).padStart(4);
+          ns.print(`║ ${task.task.padEnd(22)} 效率: ${eff}/h | 使用率: ${pop}             ║`);
+        });
+      } catch (e) {
+        ns.print(`║ 任务效率分析失败: ${e.message.substring(0, 50)} ║`);
+      }
     }
 
     /** 字符串截断 */
@@ -554,9 +693,14 @@ export async function main(ns) {
       // 确保得到数组
       members = Array.isArray(members) ? members : [];
 
-      // 调整UI大小
-      const A = members.slice(0, CONFIG.THRESHOLDS.MEMBERS.MAX).length;
-      ns.ui.resizeTail(CONFIG.UI.WINDOW.W, (A + 8) * 25.7);
+      // 记录成员统计数据
+      members.forEach(member => {
+        try {
+          StatsTracker.recordMemberStats(ns, member);
+        } catch (e) {
+          ns.print(`⚠️ 记录成员统计失败: ${member} - ${e.message}`);
+        }
+      });
 
       // 更新缓存指标
       let metrics;
