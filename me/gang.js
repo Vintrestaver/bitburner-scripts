@@ -9,9 +9,9 @@ export async function main(ns) {
     TASKS: {
       TRAIN: "Train Combat",
       VIGI: "Vigilante Justice",
-      NOOB: String.fromCharCode(77) + "ug People",
-      RESPECT: String.fromCharCode(84) + "errorism",
-      MONEY: "Human " + String.fromCharCode(84) + "rafficking",
+      NOOB: "Mug People",
+      RESPECT: "Terrorism",
+      MONEY: "Human Trafficking",
       WARFARE: "Territory Warfare",
       MANUAL: "Manual/NotReallyTaskName"
     },
