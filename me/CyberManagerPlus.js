@@ -411,6 +411,9 @@ export async function main(ns) {
         ns.ui.moveTail(W - 520, H - 200);
         manager.loopCount++;
 
+        // 更新保留金额
+        manager.reserve = Number(ns.read(CONFIG.RESERVE_FILE)) || 0;
+
         // 更新收入统计
         const now = Date.now();
         const timeDiff = (now - manager.stats.lastIncomeCheck) / 1000;
