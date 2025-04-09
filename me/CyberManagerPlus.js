@@ -62,8 +62,6 @@ export async function main(ns) {
                 serversPurchased: this.ns.getPurchasedServers().length,
                 serversUpgraded: 0,
                 hashCacheUpgrades: 0,
-                totalSpent: 0,
-                totalIncome: 0,
                 lastIncomeCheck: Date.now(),
                 lastHashes: this.ns.hacknet.numHashes()
             };
@@ -137,7 +135,6 @@ export async function main(ns) {
                     const index = this.ns.hacknet.purchaseNode();
                     if (index !== -1) {
                         this.stats.hacknetNodes++;
-                        this.recordExpense(this.ns.hacknet.getPurchaseNodeCost());
                     }
                 }
 
@@ -173,7 +170,6 @@ export async function main(ns) {
                             const after = this.getNodeStats(i);
 
                             if (JSON.stringify(before) !== JSON.stringify(after)) {
-                                this.recordExpense(cost);
                                 if (type === "Cache") this.stats.hashCacheUpgrades++;
                             }
                         }
@@ -201,7 +197,6 @@ export async function main(ns) {
 
                     if (hostname) {
                         this.stats.serversPurchased++;
-                        this.recordExpense(this.ns.getPurchasedServerCost(bestRam));
                     }
                 }
 
@@ -220,7 +215,6 @@ export async function main(ns) {
 
                             if (newHost) {
                                 this.stats.serversUpgraded++;
-                                this.recordExpense(this.ns.getPurchasedServerCost(bestRam));
                             }
                         }
                     }
@@ -254,35 +248,35 @@ export async function main(ns) {
                     }
                 }
 
-        // 管理股票脚本
-        if (this.state.stock.has4SData && !this.state.scripts.stock.running) {
-            const pid = this.ns.run(CONFIG.SCRIPTS.stock.path);
-            if (pid) {
-                this.state.scripts.stock = {
-                    running: true,
-                    pid,
-                    start: Date.now()
-                };
-            }
-        }
-
-        // 管理帮派脚本
-        const shouldRunGang = this.ns.getPlayer().karma < CONFIG.SCRIPTS.gang.karmaThreshold;
-        if (shouldRunGang !== this.state.scripts.gang.running) {
-            if (shouldRunGang) {
-                const pid = this.ns.run(CONFIG.SCRIPTS.gang.path);
-                if (pid) {
-                    this.state.scripts.gang = {
-                        running: true,
-                        pid,
-                        start: Date.now()
-                    };
+                // 管理股票脚本
+                if (this.state.stock.has4SData && !this.state.scripts.stock.running) {
+                    const pid = this.ns.run(CONFIG.SCRIPTS.stock.path);
+                    if (pid) {
+                        this.state.scripts.stock = {
+                            running: true,
+                            pid,
+                            start: Date.now()
+                        };
+                    }
                 }
-            } else {
-                this.ns.kill(this.state.scripts.gang.pid);
-                this.state.scripts.gang.running = false;
-            }
-        }
+
+                // 管理帮派脚本
+                const shouldRunGang = this.ns.getPlayer().karma < CONFIG.SCRIPTS.gang.karmaThreshold;
+                if (shouldRunGang !== this.state.scripts.gang.running) {
+                    if (shouldRunGang) {
+                        const pid = this.ns.run(CONFIG.SCRIPTS.gang.path);
+                        if (pid) {
+                            this.state.scripts.gang = {
+                                running: true,
+                                pid,
+                                start: Date.now()
+                            };
+                        }
+                    } else {
+                        this.ns.kill(this.state.scripts.gang.pid);
+                        this.state.scripts.gang.running = false;
+                    }
+                }
             } catch (e) {
                 this.recordError("脚本管理错误", e, ErrorType.FUNCTIONAL);
             }
@@ -305,7 +299,7 @@ export async function main(ns) {
         }
 
         recordExpense(amount) {
-            this.stats.totalSpent += amount;
+            // Removed ROI-related functionality
         }
 
         getNodeStats(index) {
@@ -316,11 +310,6 @@ export async function main(ns) {
                 cores: stats.cores,
                 cache: stats.cache || 0
             };
-        }
-
-        getROI() {
-            return this.stats.totalSpent > 0 ?
-                (this.stats.totalIncome / this.stats.totalSpent).toFixed(2) + "x" : "-";
         }
 
         recordError(context, error, severity = ErrorType.FUNCTIONAL) {
@@ -354,8 +343,7 @@ export async function main(ns) {
                 // 资金面板
                 const moneyPanel = [
                     `\x1b[38;5;51m● 资金\x1b[0m 可用:\x1b[3${this.money > 1e9 ? 2 : 3}m${this.format.money(this.money)}\x1b[0m`,
-                    `保留:\x1b[38;5;214m${this.format.money(this.reserve)}\x1b[0m`,
-                    `ROI:${this.getROI().includes('-') ? '\x1b[31m' : '\x1b[32m'}${this.getROI()}\x1b[0m`
+                    `保留:\x1b[38;5;214m${this.format.money(this.reserve)}\x1b[0m`
                 ];
                 ui.push(moneyPanel.join(' | '));
 
@@ -383,9 +371,9 @@ export async function main(ns) {
                     const runtime = data.running ? this.format.time((Date.now() - data.start) / 1000) : '停止';
                     scriptStatus.push(`\x1b[38;5;${color}m${name}\x1b[0m:${runtime}`);
                 };
-        addScriptStatus('自动黑客', this.state.scripts.autohack);
-        addScriptStatus('股票交易', this.state.scripts.stock);
-        addScriptStatus('帮派管理', this.state.scripts.gang);
+                addScriptStatus('自动黑客', this.state.scripts.autohack);
+                addScriptStatus('股票交易', this.state.scripts.stock);
+                addScriptStatus('帮派管理', this.state.scripts.gang);
                 ui.push(`\x1b[38;5;99m● 脚本\x1b[0m ${scriptStatus.join(' | ')}`);
 
                 // 错误信息
@@ -429,7 +417,6 @@ export async function main(ns) {
         const currentHashes = ns.hacknet.numHashes();
         const hashIncome = ((currentHashes - manager.stats.lastHashes) / 4) * 1e6;
         const scriptIncome = ns.getScriptIncome()[0] * timeDiff;
-        manager.stats.totalIncome += hashIncome + scriptIncome;
         manager.stats.lastIncomeCheck = now;
         manager.stats.lastHashes = currentHashes;
 
