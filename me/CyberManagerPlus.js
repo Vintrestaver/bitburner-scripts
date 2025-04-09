@@ -34,6 +34,11 @@ export async function main(ns) {
             stock: {
                 path: 'me/stock.js',
                 ram: ns.getScriptRam('me/stock.js', 'home')
+            },
+            gang: {
+                path: 'me/gang.js',
+                ram: ns.getScriptRam('me/gang.js', 'home'),
+                karmaThreshold: -54000
             }
         },
         HASH_VALUE: 1e6 / 4,
@@ -75,7 +80,8 @@ export async function main(ns) {
                 },
                 scripts: {
                     autohack: { running: false, pid: 0, start: 0 },
-                    stock: { running: false, pid: 0, start: 0 }
+                    stock: { running: false, pid: 0, start: 0 },
+                    gang: { running: false, pid: 0, start: 0 }
                 },
                 errors: [],
                 system: {
@@ -248,17 +254,35 @@ export async function main(ns) {
                     }
                 }
 
-                // 管理股票脚本
-                if (this.state.stock.has4SData && !this.state.scripts.stock.running) {
-                    const pid = this.ns.run(CONFIG.SCRIPTS.stock.path);
-                    if (pid) {
-                        this.state.scripts.stock = {
-                            running: true,
-                            pid,
-                            start: Date.now()
-                        };
-                    }
+        // 管理股票脚本
+        if (this.state.stock.has4SData && !this.state.scripts.stock.running) {
+            const pid = this.ns.run(CONFIG.SCRIPTS.stock.path);
+            if (pid) {
+                this.state.scripts.stock = {
+                    running: true,
+                    pid,
+                    start: Date.now()
+                };
+            }
+        }
+
+        // 管理帮派脚本
+        const shouldRunGang = this.ns.getPlayer().karma < CONFIG.SCRIPTS.gang.karmaThreshold;
+        if (shouldRunGang !== this.state.scripts.gang.running) {
+            if (shouldRunGang) {
+                const pid = this.ns.run(CONFIG.SCRIPTS.gang.path);
+                if (pid) {
+                    this.state.scripts.gang = {
+                        running: true,
+                        pid,
+                        start: Date.now()
+                    };
                 }
+            } else {
+                this.ns.kill(this.state.scripts.gang.pid);
+                this.state.scripts.gang.running = false;
+            }
+        }
             } catch (e) {
                 this.recordError("脚本管理错误", e, ErrorType.FUNCTIONAL);
             }
@@ -359,8 +383,9 @@ export async function main(ns) {
                     const runtime = data.running ? this.format.time((Date.now() - data.start) / 1000) : '停止';
                     scriptStatus.push(`\x1b[38;5;${color}m${name}\x1b[0m:${runtime}`);
                 };
-                addScriptStatus('自动黑客', this.state.scripts.autohack);
-                addScriptStatus('股票交易', this.state.scripts.stock);
+        addScriptStatus('自动黑客', this.state.scripts.autohack);
+        addScriptStatus('股票交易', this.state.scripts.stock);
+        addScriptStatus('帮派管理', this.state.scripts.gang);
                 ui.push(`\x1b[38;5;99m● 脚本\x1b[0m ${scriptStatus.join(' | ')}`);
 
                 // 错误信息
@@ -389,6 +414,7 @@ export async function main(ns) {
     ns.atExit(() => {
         ns.scriptKill(CONFIG.SCRIPTS.autohack.path, ns.getHostname());
         ns.scriptKill(CONFIG.SCRIPTS.stock.path, ns.getHostname());
+        ns.scriptKill(CONFIG.SCRIPTS.gang.path, ns.getHostname());
     });
 
     while (true) {
