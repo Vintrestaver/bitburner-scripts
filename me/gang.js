@@ -35,7 +35,7 @@ export async function main(ns) {
       CYCLE: ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],
       WANTED_MAX_LEVEL: 10, // 通缉等级上限
       EQUIP_SLOTS: 23, // 装备栏位数量
-      WINDOW: { W: 660, H: 515 } // 窗口大小
+      WINDOW: { W: 700, H: 700 } // 窗口大小
     }
   };
 
@@ -112,7 +112,7 @@ export async function main(ns) {
   class StatsTracker {
     static history = new Map();
     static lastUpdate = Date.now();
-
+    /** @param {NS} ns */
     static recordMemberStats(ns, member) {
       const info = ns.gang.getMemberInformation(member);
       const stats = {
@@ -150,7 +150,7 @@ export async function main(ns) {
         agi: (last.agi - first.agi) / duration
       };
     }
-
+    /** @param {NS} ns */
     static analyzeEquipment(ns) {
       const equipmentList = ns.gang.getEquipmentNames();
       const members = ns.gang.getMemberNames();
@@ -197,7 +197,7 @@ export async function main(ns) {
 
       return results.sort((a, b) => b.value - a.value);
     }
-
+    /** @param {NS} ns */
     static getTaskEfficiency(ns) {
       const efficiency = new Map();
       const members = ns.gang.getMemberNames();
@@ -325,6 +325,7 @@ export async function main(ns) {
   // ===================== 类定义 =====================
   class GangOperations {
     /** 自动招募成员 */
+    /** @param {NS} ns */
     static recruitMembers(ns) {
       try {
         const memberCount = ns.gang.getMemberNames().length;
@@ -342,6 +343,7 @@ export async function main(ns) {
     }
 
     /** 智能装备采购 */
+    /** @param {NS} ns */
     static purchaseEquipment(ns) {
       try {
         const budget = ns.getServerMoneyAvailable('home');
@@ -376,6 +378,7 @@ export async function main(ns) {
     }
 
     /** 成员晋升处理 */
+    /** @param {NS} ns */
     static handleAscensions(ns, STATE) {
       try {
         if (Date.now() - STATE.lastAscend < 120000) return;
@@ -408,6 +411,7 @@ export async function main(ns) {
     }
 
     /** 动态任务分配 */
+    /** @param {NS} ns */
     static assignTasks(ns, STATE, forceReset = false) {
       try {
         const gangInfo = Cache.getWithRetry('gangInfo', () => {
@@ -472,6 +476,7 @@ export async function main(ns) {
     }
 
     /** 最优任务决策 */
+    /** @param {NS} ns */
     static #determineOptimalTask(ns, member, gangInfo, shouldWarfare) {
       const memberInfo = ns.gang.getMemberInformation(member);
       const stats = memberInfo.str + memberInfo.def + memberInfo.dex + memberInfo.agi;
@@ -497,6 +502,7 @@ export async function main(ns) {
 
   class Dashboard {
     /** 渲染主界面 */
+    /** @param {NS} ns */
     static render(ns, gangInfo, members, cycle) {
       try {
         if (!gangInfo || !members) {
@@ -515,6 +521,7 @@ export async function main(ns) {
     }
 
     /** 头部信息 */
+    /** @param {NS} ns */
     static #renderHeader(ns, info, cycle) {
       if (!info || !info.faction) {
         ns.print('╔═════════════════════════════════════════════════════════════════╗');
@@ -540,6 +547,7 @@ export async function main(ns) {
     }
 
     /** 成员列表 */
+    /** @param {NS} ns */
     static #renderMembers(ns, members) {
       if (!Array.isArray(members) || members.length === 0) {
         ns.print('║ 无成员数据                                                     ║');
@@ -582,6 +590,7 @@ export async function main(ns) {
     }
 
     /** 底部状态栏 */
+    /** @param {NS} ns */
     static #renderFooter(ns, info, members) {
       ns.print('╠═════════╩══════════════════╩══════════╩═════════════════════════╣');
 
@@ -592,17 +601,18 @@ export async function main(ns) {
       }
 
       const wantedLevel = Math.min(CONFIG.UI.WANTED_MAX_LEVEL, Math.floor(info.wantedLevel || 0));
-      const warfareStatus = info.territoryWarfareEngaged ? '■ WARFARE' : '□ PEACE ';
+      const warfareStatus = info.territoryWarfareEngaged ? '■ WARFARE' : '□ PEACE  ';
       const wantedBar = '◆'.repeat(wantedLevel) + '◇'.repeat(CONFIG.UI.WANTED_MAX_LEVEL - wantedLevel);
       const memberCount = Array.isArray(members) ? members.length : 0;
 
       ns.print(`║ ${warfareStatus} │ Wanted: [${wantedBar}] │ ` +
         `Members: ${memberCount}/${CONFIG.THRESHOLDS.MEMBERS.MAX} │ ` +
-        `Clash: ${ns.formatPercent(info.territoryClashChance || 0, 0).padEnd(5)} ║`);
+        `Clash: ${ns.formatPercent(info.territoryClashChance || 0, 0).padEnd(4)} ║`);
       ns.print('╠═════════════════════════════════════════════════════════════════╣');
     }
 
     /** 性能指标 */
+    /** @param {NS} ns */
     static #renderMetrics(ns) {
       const metrics = Cache.get('metrics') || {
         totalRespect: 0,
@@ -632,6 +642,7 @@ export async function main(ns) {
     }
 
     /** 装备分析 */
+    /** @param {NS} ns */
     static #renderEquipmentAnalysis(ns) {
       try {
         const equipment = StatsTracker.analyzeEquipment(ns);
@@ -654,6 +665,7 @@ export async function main(ns) {
     }
 
     /** 任务效率分析 */
+    /** @param {NS} ns */
     static #renderTaskEfficiency(ns) {
       try {
         const efficiency = StatsTracker.getTaskEfficiency(ns);
@@ -697,6 +709,7 @@ export async function main(ns) {
   };
 
   // ===================== 初始化流程 =====================
+  /** @param {NS} ns */
   const initialize = (ns) => {
     ns.disableLog('ALL');
     ns.ui.setTailTitle(`GangManager v5.5 [${ns.getScriptName()}]`);
@@ -743,6 +756,7 @@ export async function main(ns) {
   await ns.sleep(1000);
 
   while (true) {
+    ns.ui.resizeTail(CONFIG.UI.WINDOW.W, CONFIG.UI.WINDOW.H)
     try {
       // 确保在帮派中
       if (!ns.gang.inGang()) {
