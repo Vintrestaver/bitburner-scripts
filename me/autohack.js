@@ -67,55 +67,82 @@ export async function main(ns) {
             this.cache = {};
             this.statsCache = {};
             this.lastUpdated = {};
+            this.cacheHits = 0;
+            this.cacheMisses = 0;
+            
+            // 缓存配置: [属性名, 过期时间(ms)]
+            this.cacheConfig = [
+                ['maxMoney', 60000],      // 60秒
+                ['maxRam', 60000],        // 60秒
+                ['portsRequired', 60000], // 60秒
+                ['minSecurityLevel', 60000],
+                ['moneyAvailable', 3000], // 3秒
+                ['securityLevel', 3000],  // 3秒
+                ['usedRam', 3000]         // 3秒
+            ];
         }
 
-        // 批量获取服务器信息
+        // 批量获取服务器信息(优化版)
         batchGetServers(hosts) {
             const now = Date.now();
             const results = {};
+            const toUpdate = [];
 
-            // 先从缓存获取有效数据
+            // 批量检查缓存有效性
             hosts.forEach(host => {
                 if (this.cache[host] && now - (this.lastUpdated[host] || 0) < 5000) {
                     results[host] = this.cache[host];
+                    this.cacheHits++;
+                } else {
+                    toUpdate.push(host);
+                    this.cacheMisses++;
                 }
             });
 
-            // 获取需要更新的服务器
-            const toUpdate = hosts.filter(host => !results[host]);
-            toUpdate.forEach(host => {
-                this.cache[host] = this.ns.getServer(host);
-                this.lastUpdated[host] = now;
-                results[host] = this.cache[host];
-            });
+            // 批量更新过期缓存
+            if (toUpdate.length > 0) {
+                toUpdate.forEach(host => {
+                    this.cache[host] = this.ns.getServer(host);
+                    this.lastUpdated[host] = now;
+                    results[host] = this.cache[host];
+                });
+            }
 
             return results;
         }
 
-        // 常用统计信息的快捷访问方法
-        getMaxMoney(host) { // 获取最大资金
-            return this._getCachedStat(host, 'maxMoney', () => this.ns.getServerMaxMoney(host));
+        // 常用统计信息的快捷访问方法(优化版)
+        getMaxMoney(host) { 
+            return this._getCachedStat(host, 'maxMoney', 
+                () => this.ns.getServerMaxMoney(host), 60000);
         }
-        getMoneyAvailable(host) { // 获取可用资金
-            return this._getCachedStat(host, 'moneyAvailable', () => this.ns.getServerMoneyAvailable(host));
+        getMoneyAvailable(host) { 
+            return this._getCachedStat(host, 'moneyAvailable', 
+                () => this.ns.getServerMoneyAvailable(host), 3000);
         }
-        getMaxRam(host) {   // 获取最大RAM  
-            return this._getCachedStat(host, 'maxRam', () => this.ns.getServerMaxRam(host));
+        getMaxRam(host) {   
+            return this._getCachedStat(host, 'maxRam', 
+                () => this.ns.getServerMaxRam(host), 60000);
         }
-        getUsedRam(host) {  // 获取已用RAM
-            return this._getCachedStat(host, 'usedRam', () => this.ns.getServerUsedRam(host));
+        getUsedRam(host) {  
+            return this._getCachedStat(host, 'usedRam', 
+                () => this.ns.getServerUsedRam(host), 3000);
         }
-        getPortsRequired(host) {    // 获取所需端口数
-            return this._getCachedStat(host, 'portsRequired', () => this.ns.getServerNumPortsRequired(host));
+        getPortsRequired(host) {    
+            return this._getCachedStat(host, 'portsRequired', 
+                () => this.ns.getServerNumPortsRequired(host), 60000);
         }
-        getRequiredHackingLevel(host) { // 获取所需破解等级
-            return this._getCachedStat(host, 'requiredHackingLevel', () => this.ns.getServerRequiredHackingLevel(host));
+        getRequiredHackingLevel(host) { 
+            return this._getCachedStat(host, 'requiredHackingLevel', 
+                () => this.ns.getServerRequiredHackingLevel(host), 60000);
         }
-        getSecurityLevel(host) {      // 获取安全等级
-            return this._getCachedStat(host, 'securityLevel', () => this.ns.getServerSecurityLevel(host));
+        getSecurityLevel(host) {      
+            return this._getCachedStat(host, 'securityLevel', 
+                () => this.ns.getServerSecurityLevel(host), 3000);
         }
-        getMinSecurityLevel(host) { // 获取最小安全等级
-            return this._getCachedStat(host, 'minSecurityLevel', () => this.ns.getServerMinSecurityLevel(host));
+        getMinSecurityLevel(host) { 
+            return this._getCachedStat(host, 'minSecurityLevel', 
+                () => this.ns.getServerMinSecurityLevel(host), 60000);
         }
 
         // 获取完整服务器对象
@@ -127,18 +154,33 @@ export async function main(ns) {
             return this.cache[host];
         }
 
-        // 内部缓存方法
-        _getCachedStat(host, statName, getter) {
+        // 优化的内部缓存方法
+        _getCachedStat(host, statName, getter, ttl = 3000) {
             const now = Date.now();
-            if (!this.statsCache[host] ||
-                !this.statsCache[host][statName] ||
-                now - (this.lastUpdated[host] || 0) > 3000) {
-
-                if (!this.statsCache[host]) this.statsCache[host] = {};
-                this.statsCache[host][statName] = getter();
-                this.lastUpdated[host] = now;
+            if (!this.statsCache[host]) this.statsCache[host] = {};
+            
+            const cacheEntry = this.statsCache[host][statName];
+            if (!cacheEntry || now - (cacheEntry.timestamp || 0) > ttl) {
+                this.statsCache[host][statName] = {
+                    value: getter(),
+                    timestamp: now
+                };
+                this.cacheMisses++;
+            } else {
+                this.cacheHits++;
             }
-            return this.statsCache[host][statName];
+            return this.statsCache[host][statName].value;
+        }
+
+        // 获取缓存统计信息
+        getCacheStats() {
+            const hitRate = this.cacheHits / (this.cacheHits + this.cacheMisses) * 100;
+            return {
+                hits: this.cacheHits,
+                misses: this.cacheMisses,
+                hitRate: hitRate.toFixed(2) + '%',
+                cacheSize: Object.keys(this.cache).length
+            };
         }
 
         // 清理缓存
