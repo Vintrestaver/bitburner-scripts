@@ -534,7 +534,7 @@ export async function main(ns) {
     // 主循环控制变量
     let cycles = 0; // 循环计数器
     let lastTargetCount = 0;
-    let sleepTime = 100; // 初始sleep时间
+    let sleepTime = 1000; // 初始sleep时间
 
     /**
      * 主执行循环
@@ -571,12 +571,6 @@ export async function main(ns) {
             await scanNetwork('', 'home');
             await allocateResourcesImproved();
             generateLog();
-
-            // 动态调整sleep时间
-            if (targets.length !== lastTargetCount) {
-                sleepTime = Math.max(50, Math.min(500, 200 - targets.length * 2));
-                lastTargetCount = targets.length;
-            }
         } catch (e) {
             handleError(`主循环错误: ${e}`);
             sleepTime = 5000; // 错误时延长等待
