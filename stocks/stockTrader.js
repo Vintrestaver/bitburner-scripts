@@ -36,7 +36,7 @@ export async function main(ns) {
 	let indexDots = 0;  // 当前进度点索引
 
 	const growServer = "home";  // 运行此脚本的服务器(默认为home)
-	const growScript = '/stocks/growStock.js';  // 股票增长脚本
+	const growScript = 'stocks/growStock.js';  // 股票增长脚本
 	let growThreads = 10000000  // 用于增长脚本的最大线程数
 
 	let totalIncome = 0;  // 总收入统计
