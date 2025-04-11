@@ -711,6 +711,7 @@ export async function main(ns) {
     // ===================== 初始化流程 =====================
     /** @param {NS} ns */
     const initialize = (ns) => {
+        ns.atExit(() => ns.ui.closeTail());
         ns.disableLog('ALL');
         ns.ui.setTailTitle(`GangManager v5.5 [${ns.getScriptName()}]`);
         ns.ui.openTail();
