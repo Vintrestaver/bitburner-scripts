@@ -321,26 +321,26 @@ export async function main(ns) {
     // ===================== 仪表盘 =====================
     function displayDashboard() {
         ns.print("═".repeat(80)); // 打印分隔线
-        ns.print(`${COLORS.header}─[ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ]─[ StockManager ${CONFIG.V} ]` + '─'.repeat(45)); // 打印头部信息
+        ns.print(`${COLORS.header}─[ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ]─[ 量化交易系统 ${CONFIG.V} ]` + '─'.repeat(45)); // 打印头部信息
 
         const volColor = getRisk() > 0.2 ? COLORS.warning : COLORS.info; // 根据风险设置颜色
         ns.print([
-            `${COLORS.info}NET: ${fmtMoney(getNetWorth())}${COLORS.reset}`, // 净资产
-            `${COLORS.profit}PRO: ${fmtMoney(STATE.metrics.totalProfit)}${COLORS.reset}`, // 总利润
-            `${COLORS.warning}DRA: ${fmtPct(STATE.metrics.maxDrawdown)}${COLORS.reset}`, // 最大回撤
-            `${COLORS.highlight}LEV: ${getLeverage().toFixed(1)}x${COLORS.reset}`, // 杠杆倍数
-            `${volColor}RISK: ${getRisk().toFixed(2)}${COLORS.reset}` // 风险水平
+            `${COLORS.info}资产: ${fmtMoney(getNetWorth())}${COLORS.reset}`, // 净资产
+            `${COLORS.profit}盈利: ${fmtMoney(STATE.metrics.totalProfit)}${COLORS.reset}`, // 总利润
+            `${COLORS.warning}回撤: ${fmtPct(STATE.metrics.maxDrawdown)}${COLORS.reset}`, // 最大回撤
+            `${COLORS.highlight}杠杆: ${getLeverage().toFixed(1)}x${COLORS.reset}`, // 杠杆倍数
+            `${volColor}风险: ${getRisk().toFixed(2)}${COLORS.reset}` // 风险水平
         ].join(' | ')); // 打印关键指标
         ns.print("═".repeat(80)); // 打印分隔线
 
-        ns.print(`${COLORS.header}──📦 Position ${'─'.repeat(80 - 14)}${COLORS.reset}`); // 打印持仓标题
+        ns.print(`${COLORS.header}──📦 持仓信息 ${'─'.repeat(80 - 14)}${COLORS.reset}`); // 打印持仓标题
         getActivePositions()
             .sort((a, b) => b.totalProfit - a.totalProfit) // 按利润排序
             .slice(0, CONFIG.DISPLAY_ROWS) // 截取显示行数
             .forEach((p, i) => ns.print(fmtPosition(p, i + 1))); // 打印持仓信息
         ns.print("═".repeat(80)); // 打印分隔线
 
-        ns.print(`${COLORS.header}──📜 Latest Transactions ${'─'.repeat(80 - 25)}${COLORS.reset}`); // 打印交易记录标题
+        ns.print(`${COLORS.header}──📜 最近交易记录 ${'─'.repeat(80 - 20)}${COLORS.reset}`); // 打印交易记录标题
         STATE.transactions.slice(-5).forEach(t => {
             const profitColor = t.profit >= 0 ? COLORS.profit : COLORS.loss; // 根据收益设置颜色
             ns.print(
