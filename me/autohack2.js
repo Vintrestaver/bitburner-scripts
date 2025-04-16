@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export async function 0main(ns) {
+export async function main(ns) {
     // ===================== 配置部分 ===================== 
     ns.disableLog("ALL");   // 禁用所有日志 
     ns.enableLog("exec");   // 只保留执行日志 
