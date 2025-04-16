@@ -5,29 +5,24 @@
 export async function main(ns) {
     // ===================== 核心配置 =====================
     const CONFIG = {
-        RISK_PER_TRADE: 0.2,       // 单次交易的风险比例
-        MAX_EXPOSURE: 0.7,          // 最大风险敞口比例
+        RISK_PER_TRADE: 1,       // 单次交易的风险比例
+        MAX_EXPOSURE: 1,          // 最大风险敞口比例
         TREND_WINDOW: 8,            // 短期移动平均线窗口大小
         BASE_WINDOW: 40,            // 长期移动平均线窗口大小
         RSI_WINDOW: 14,             // RSI指标窗口大小
         VOLATILITY_FILTER: 0.015,   // 波动率过滤阈值
-        STOP_LOSS: 0.025,           // 止损阈值
-        TAKE_PROFIT: 0.12,          // 止盈阈值
+        STOP_LOSS: 0.05,           // 止损阈值
+        TAKE_PROFIT: 0.15,          // 止盈阈值
         ENABLE_SHORT: true,         // 是否启用卖空操作
-        MAX_SHARE_RATIO: 0.2,      // 单股最大持仓比例
+        MAX_SHARE_RATIO: 0.4,      // 单股最大持仓比例
         FORECAST_BUY: 0.65,         // 做多预测阈值
         FORECAST_SELL: 0.35,        // 做空预测阈值
         DISPLAY_ROWS: 20,           // 仪表盘显示的最大行数
         CACHE_DURATION: 1000,       // 缓存有效时间（毫秒）
-        BATCH_SIZE: 10,             // 批处理大小
         ERROR_RETRY_LIMIT: 3,       // 错误重试次数
-        MIN_TRADE_AMOUNT: 1e6,      // 最小交易金额
-        PRICE_MEMORY: 200,          // 增加价格记忆长度
-        MOMENTUM_THRESHOLD: 0.02,   // 动量阈值
-        ADAPTIVE_RISK: true,        // 启用自适应风险控制
+        PRICE_MEMORY: 150,          // 增加价格记忆长度
         MARKET_REGIME_WINDOW: 50,   // 市场状态判断窗口
-        MAX_POSITIONS: 8,           // 最大持仓数量限制
-        MIN_POSITION_HOLD: 5,       // 最小持仓时间(分钟)
+        MAX_POSITIONS: 50,           // 最大持仓数量限制
         V: 'v7.0'
     };
 
@@ -241,7 +236,6 @@ export async function main(ns) {
     function analyzeStock(sym) {
         const data = STATE.history.get(sym); // 获取历史数据
         const volatility = ns.stock.getVolatility(sym);
-        const momentum = calculateMomentum(data.prices);
 
         return {
             symbol: sym,                     // 股票符号
@@ -250,7 +244,7 @@ export async function main(ns) {
             trend: data.maShort > data.maLong ? 'bull' : 'bear', // 趋势判断
             rsi: data.rsi,                   // RSI值
             volatility: ns.stock.getVolatility(sym), // 波动率
-            momentum: (data.maShort - data.maLong) / data.maLong * 100, // 动量
+            momentum: calculateMomentum(data.prices), // 动量
             forecast: ns.stock.getForecast(sym), // 预测值
             volatilityTrend: volatility / MARKET_STATE.volatility,
             correlation: calculateCorrelation(data.prices),
@@ -274,7 +268,7 @@ export async function main(ns) {
         if (analysis.trend === 'bull' && longShares <= 0 && positionScore > marketCondition) {
             const buyCondition = (
                 analysis.forecast > CONFIG.FORECAST_BUY &&
-                analysis.rsi < 40 &&
+                analysis.rsi < 30 &&
                 analysis.volatility < CONFIG.VOLATILITY_FILTER
             );
             if (buyCondition) {
@@ -286,7 +280,7 @@ export async function main(ns) {
         if (CONFIG.ENABLE_SHORT && analysis.trend === 'bear' && shortShares === 0) {
             const shortCondition = (
                 analysis.forecast < CONFIG.FORECAST_SELL &&
-                analysis.rsi > 60 &&
+                analysis.rsi > 70 &&
                 analysis.volatility < CONFIG.VOLATILITY_FILTER
             );
             if (shortCondition) {
@@ -302,7 +296,7 @@ export async function main(ns) {
         if (long > 0) {
             const currentPrice = analysis.bidPrice; // 当前买入价
             const profitRatio = (currentPrice - longAvg) / longAvg; // 计算盈利比率
-            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast < CONFIG.FORECAST_BUY - 0.05) || profitRatio >= CONFIG.TAKE_PROFIT) {
+            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast < CONFIG.FORECAST_BUY - 0.05) || profitRatio >= CONFIG.TAKE_PROFIT && analysis.rsi > 70) {
                 const sold = ns.stock.sellStock(sym, long); // 卖出股票
                 if (sold > 0) logTransaction('Sell 📈', sym, -long, currentPrice, long * (currentPrice - longAvg)); // 记录交易
             }
@@ -311,7 +305,7 @@ export async function main(ns) {
         if (short > 0) {
             const currentPrice = analysis.askPrice; // 当前卖出价
             const profitRatio = (shortAvg - currentPrice) / shortAvg; // 计算盈利比率
-            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast > CONFIG.FORECAST_BUY + 0.05) || profitRatio >= CONFIG.TAKE_PROFIT) {
+            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast > CONFIG.FORECAST_BUY + 0.05) || profitRatio >= CONFIG.TAKE_PROFIT && analysis.rsi < 30) {
                 const bought = ns.stock.sellShort(sym, short); // 平仓卖空
                 if (bought > 0) logTransaction('Sell 📉', sym, -short, currentPrice, short * (shortAvg - currentPrice)); // 记录交易
             }
@@ -543,10 +537,16 @@ export async function main(ns) {
     }
 
     function determineMarketRegime(volatility, momentum, correlation) {
-        if (volatility > 0.02 && momentum > 0.02) {
-            return 'trending'; // 趋势市场
-        } else if (volatility > 0.02 || correlation > 0.5) {
-            return 'volatile'; // 波动市场
+        // 增强市场状态判断逻辑
+        const trendingThreshold = volatility * 1.5;
+        const volatileThreshold = volatility * 0.8;
+
+        if (momentum > trendingThreshold && correlation > 0.4) {
+            return 'trending'; // 强趋势市场
+        } else if (volatility > volatileThreshold || correlation > 0.6) {
+            return 'volatile'; // 高波动市场
+        } else if (volatility < 0.01 && Math.abs(momentum) < 0.01) {
+            return 'stagnant'; // 停滞市场
         } else {
             return 'normal'; // 正常市场
         }
