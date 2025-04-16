@@ -1,8 +1,7 @@
 /** @param {NS} ns */
 export async function main(ns) {
     // ===================== 配置部分 ===================== 
-    ns.disableLog("ALL");   // 禁用所有日志 
-    ns.enableLog("exec");   // 只保留执行日志 
+    ns.disableLog("ALL");   // 禁用所有日志  
     ns.ui.openTail();       // 打开脚本日志窗口 
 
     // 常量配置 
@@ -21,7 +20,7 @@ export async function main(ns) {
         RETRY_DELAY: 5000,
         SCAN_INTERVAL: 5000,      // 扫描间隔(ms)
         ACTION_INTERVAL: 1000,     // 行动间隔(ms)
-        MAX_TARGETS: 100,            // 同时攻击的最大目标数 
+        MAX_TARGETS: 65,            // 同时攻击的最大目标数 
         RESERVE_RAM: 32            // 保留的RAM(GB)
     };
 
@@ -45,6 +44,7 @@ export async function main(ns) {
 
     // ===================== 核心功能 ===================== 
     class BotManager {
+        /** @param {NS} ns */
         constructor(ns, config) {
             this.ns = ns;
             this.config = config;
@@ -53,6 +53,51 @@ export async function main(ns) {
             this.lastScanTime = 0;
             this.lastTargetUpdateTime = 0;
             this.scriptRamCache = {};
+            this.stats = {
+                totalHacks: 0,
+                totalGrows: 0,
+                totalWeakens: 0,
+                totalMoney: 0,
+                startTime: Date.now()
+            };
+        }
+
+        // 仪表盘显示
+        showDashboard(targets) {
+            const now = Date.now();
+            const runtime = this.ns.tFormat(now - this.stats.startTime);
+            const ramUsed = this.ns.getServerUsedRam(this.config.HOME_SERVER);
+            const ramMax = this.ns.getServerMaxRam(this.config.HOME_SERVER);
+            const ramPercent = this.ns.formatPercent(ramUsed / ramMax, 1);
+
+            // 清屏并显示标题
+            this.ns.clearLog();
+            this.ns.print(`🛠️  AutoHack 仪表盘 | 运行时间: ${runtime}`);
+            this.ns.print(`📊 资源: ${this.ns.formatRam(ramUsed)}/${this.ns.formatRam(ramMax)} (${ramPercent})`);
+            this.ns.print(`💰 总收入: ${this.ns.formatNumber(this.stats.totalMoney).padEnd(8)}`);
+            this.ns.print(`⚡ 操作统计: 入侵 ${this.ns.formatNumber(this.stats.totalHacks).padEnd(8)} | 增长 ${this.ns.formatNumber(this.stats.totalGrows).padEnd(8)} | 削弱 ${this.ns.formatNumber(this.stats.totalWeakens).padEnd(8)}`);
+            this.ns.print("=".repeat(50));
+
+            // 显示目标状态
+            if (targets && targets.length > 0) {
+                this.ns.print(`🎯 当前目标 (${targets.length}个):`);
+                const maxTargets = Math.min(5, targets.length);
+                for (let i = 0; i < maxTargets; i++) {
+                    const target = targets[i];
+                    const money = this.ns.getServerMoneyAvailable(target.hostname);
+                    const maxMoney = target.maxMoney;
+                    const security = this.ns.getServerSecurityLevel(target.hostname);
+                    const minSecurity = this.ns.getServerMinSecurityLevel(target.hostname);
+
+                    this.ns.print(
+                        `${i + 1}.`.padStart(3) + `${target.hostname.padEnd(20)} ` +
+                        `💰 ${this.ns.formatPercent(money / maxMoney, 1).padEnd(6)}` +
+                        `🔒 ${security.toFixed(1)}/${minSecurity.toFixed(1)}`.padEnd(13) +
+                        `⭐ ${this.ns.formatNumber(target.score)}`
+                    );
+                }
+            }
+            this.ns.print("=".repeat(50));
         }
 
         // 初始化脚本 
@@ -60,7 +105,7 @@ export async function main(ns) {
             try {
                 for (const [name, content] of Object.entries(SCRIPTS_CONTENT)) {
                     if (!this.ns.fileExists(name)) {
-                        await this.ns.write(name, content, "w");
+                        this.ns.write(name, content, "w");
                         this.ns.print(`✓  已创建脚本: ${name}`);
                     }
                 }
@@ -243,21 +288,23 @@ export async function main(ns) {
                 // 优先削弱 
                 if (security > minSecurity + this.config.SECURITY_THRESHOLD && weakenThreads > 0) {
                     this.ns.exec(this.config.SCRIPTS.WEAKEN, this.config.HOME_SERVER, weakenThreads, server);
-                    this.ns.print(`⚡  削弱 ${server} (${this.ns.formatNumber(weakenThreads)} 线程)`);
+                    this.stats.totalWeakens += weakenThreads;
                     return;
                 }
 
                 // 其次增长 
                 if (money < maxMoney * this.config.MONEY_THRESHOLD && growThreads > 0) {
                     this.ns.exec(this.config.SCRIPTS.GROW, this.config.HOME_SERVER, growThreads, server);
-                    this.ns.print(`📈  增长 ${server} (${this.ns.formatNumber(growThreads)} 线程)`);
+                    this.stats.totalGrows += growThreads;
                     return;
                 }
 
                 // 最后入侵 
                 if (hackThreads > 0) {
+                    const moneyStolen = this.ns.hackAnalyze(server) * hackThreads * money;
+                    this.stats.totalMoney += moneyStolen;
+                    this.stats.totalHacks += hackThreads;
                     this.ns.exec(this.config.SCRIPTS.HACK, this.config.HOME_SERVER, hackThreads, server);
-                    this.ns.print(`💰  入侵 ${server} (${this.ns.formatNumber(hackThreads)} 线程)`);
                 }
             } catch (error) {
                 this.ns.print(`×  攻击失败: ${target.hostname}  - ${error}`);
@@ -278,6 +325,9 @@ export async function main(ns) {
                         await this.ns.sleep(this.config.SCAN_INTERVAL);
                         continue;
                     }
+
+                    // 显示仪表盘
+                    this.showDashboard(targets);
 
                     // 攻击前几个最有价值的目标 
                     const maxTargets = Math.min(this.config.MAX_TARGETS, targets.length);
