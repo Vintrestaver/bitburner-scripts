@@ -1,30 +1,32 @@
 /** @param {NS} ns */
 export async function main(ns) {
     // ===================== 配置部分 ===================== 
-    ns.disableLog("ALL");   // 禁用所有日志  
-    ns.ui.openTail();       // 打开脚本日志窗口 
+    ns.disableLog("ALL");   // 禁用所有日志以保持控制台整洁
+    ns.ui.openTail();       // 打开脚本日志窗口方便查看运行状态
 
-    // 常量配置 
+    // 常量配置 - 控制脚本行为的各种参数
     const CONFIG = {
-        HOME_SERVER: "home",
-        SCRIPTS: {
-            HACK: "autoHack.js",
-            GROW: "autoGrow.js",
-            WEAKEN: "autoWeaken.js"
+        // 主服务器名称
+        HOME_SERVER: "home",  // 主服务器名称
+        SCRIPTS: {            // 使用的脚本文件名配置
+            HACK: "autoHack.js",   // 入侵脚本
+            GROW: "autoGrow.js",   // 增长脚本  
+            WEAKEN: "autoWeaken.js" // 削弱脚本
         },
-        HACK_RATIO: 0.5,
-        SECURITY_THRESHOLD: 5,     // 安全等级阈值 
-        MONEY_THRESHOLD: 0.9,      // 金钱比例阈值 
-        MIN_SECURITY_LEVEL: 2,
-        MAX_RETRIES: 3,
-        RETRY_DELAY: 5000,
-        SCAN_INTERVAL: 5000,      // 扫描间隔(ms)
-        ACTION_INTERVAL: 1000,     // 行动间隔(ms)
-        MAX_TARGETS: 65,            // 同时攻击的最大目标数 
-        RESERVE_RAM: 32            // 保留的RAM(GB)
+        HACK_RATIO: 0.5,           // 入侵时获取金钱的比例
+        SECURITY_THRESHOLD: 5,     // 安全等级阈值(超过最小值多少时需要削弱)
+        MONEY_THRESHOLD: 0.9,      // 金钱比例阈值(低于最大值多少时需要增长)
+        MIN_SECURITY_LEVEL: 2,     // 最低安全等级(低于此值不再削弱)
+        MAX_RETRIES: 3,            // 最大重试次数
+        RETRY_DELAY: 5000,         // 重试延迟(毫秒)
+        SCAN_INTERVAL: 5000,       // 服务器扫描间隔(毫秒)
+        ACTION_INTERVAL: 1000,     // 攻击行动间隔(毫秒)
+        MAX_TARGETS: 65,           // 同时攻击的最大目标数 
+        RESERVE_RAM: 32            // 为系统保留的RAM(GB)
     };
 
     // ===================== 配套脚本定义 ===================== 
+    // 定义三个基本攻击脚本的内容，如果不存在会自动创建
     const SCRIPTS_CONTENT = {
         [CONFIG.SCRIPTS.HACK]: `/** @param {NS} ns */
         export async function main(ns) {
@@ -43,8 +45,16 @@ export async function main(ns) {
     };
 
     // ===================== 核心功能 ===================== 
+    /**
+     * 自动化攻击管理类 - 负责扫描服务器、选择目标、执行攻击策略
+     * 包含完整的攻击逻辑和状态管理
+     */
     class BotManager {
-        /** @param {NS} ns */
+        /** 
+         * 构造函数
+         * @param {NS} ns - Bitburner API 命名空间
+         * @param {Object} config - 配置对象
+         */
         constructor(ns, config) {
             this.ns = ns;
             this.config = config;
@@ -62,7 +72,10 @@ export async function main(ns) {
             };
         }
 
-        // 仪表盘显示
+        /**
+         * 显示运行状态仪表盘
+         * @param {Array} targets - 当前攻击目标数组
+         */
         showDashboard(targets) {
             const now = Date.now();
             const runtime = this.ns.tFormat(now - this.stats.startTime);
@@ -100,7 +113,10 @@ export async function main(ns) {
             this.ns.print("=".repeat(50));
         }
 
-        // 初始化脚本 
+        /**
+         * 初始化必要的攻击脚本
+         * @returns {Promise<boolean>} 是否初始化成功
+         */
         async initialize() {
             try {
                 for (const [name, content] of Object.entries(SCRIPTS_CONTENT)) {
@@ -117,7 +133,11 @@ export async function main(ns) {
             }
         }
 
-        // 获取脚本RAM使用量（带缓存）
+        /**
+         * 获取脚本RAM使用量（带缓存功能）
+         * @param {string} script - 脚本文件名
+         * @returns {number} 脚本占用的RAM(GB)
+         */
         getScriptRam(script) {
             if (!this.scriptRamCache[script]) {
                 this.scriptRamCache[script] = this.ns.getScriptRam(script);
@@ -125,7 +145,11 @@ export async function main(ns) {
             return this.scriptRamCache[script];
         }
 
-        // 扫描服务器（带缓存）
+        /**
+         * 扫描所有可访问的服务器（带缓存功能）
+         * @param {boolean} forceUpdate - 是否强制更新缓存
+         * @returns {Promise<Array>} 服务器名称数组
+         */
         async scanServers(forceUpdate = false) {
             const now = Date.now();
             if (!forceUpdate && now - this.lastScanTime < this.config.SCAN_INTERVAL && this.serverCache.length > 0) {
@@ -162,7 +186,11 @@ export async function main(ns) {
             throw new Error(`服务器扫描失败，已达最大重试次数`);
         }
 
-        // 获取可攻击目标（带缓存）
+        /**
+         * 获取可攻击的目标服务器列表（带缓存功能）
+         * @param {boolean} forceUpdate - 是否强制更新缓存
+         * @returns {Promise<Array>} 目标服务器数组，按价值排序
+         */
         async getTargets(forceUpdate = false) {
             const now = Date.now();
             if (!forceUpdate && now - this.lastTargetUpdateTime < this.config.SCAN_INTERVAL && this.targetCache.length > 0) {
@@ -213,7 +241,11 @@ export async function main(ns) {
             }
         }
 
-        // 检查是否可以入侵服务器 
+        /**
+         * 检查是否可以使用现有工具入侵服务器
+         * @param {string} server - 服务器名称
+         * @returns {boolean} 是否可以入侵
+         */
         canNuke(server) {
             const ports = this.ns.getServerNumPortsRequired(server);
             let openPorts = 0;
@@ -224,7 +256,11 @@ export async function main(ns) {
             return openPorts >= ports;
         }
 
-        // 入侵服务器 
+        /**
+         * 尝试入侵目标服务器
+         * @param {string} server - 服务器名称
+         * @returns {Promise<boolean>} 是否入侵成功
+         */
         async nukeServer(server) {
             let retries = 0;
             while (retries < this.config.MAX_RETRIES) {
@@ -247,7 +283,12 @@ export async function main(ns) {
             return false;
         }
 
-        // 计算可用线程数（考虑保留RAM）
+        /**
+         * 计算可用的线程数（考虑保留RAM和已有运行脚本）
+         * @param {string} script - 脚本文件名
+         * @param {string} server - 目标服务器名称
+         * @returns {number} 可用线程数
+         */
         calculateThreads(script, server) {
             const ramAvailable = Math.max(0,
                 this.ns.getServerMaxRam(this.config.HOME_SERVER) -
@@ -259,14 +300,23 @@ export async function main(ns) {
             return ramPerThread > 0 ? Math.max(1, Math.floor(ramAvailable / ramPerThread)) : 0;
         }
 
-        // 获取当前运行的脚本数量 
+        /**
+         * 获取当前针对特定目标运行的脚本线程数
+         * @param {string} script - 脚本文件名
+         * @param {string} target - 目标服务器名称
+         * @returns {number} 总运行线程数
+         */
         getRunningScripts(script, target) {
             return this.ns.ps(this.config.HOME_SERVER)
                 .filter(proc => proc.filename === script && proc.args[0] === target)
                 .reduce((sum, proc) => sum + proc.threads, 0);
         }
 
-        // 执行攻击策略 
+        /**
+         * 对单个目标执行攻击策略
+         * 根据目标状态自动选择最优攻击方式（削弱/增长/入侵）
+         * @param {Object} target - 目标服务器对象
+         */
         async attackTarget(target) {
             try {
                 const server = target.hostname;
@@ -311,7 +361,9 @@ export async function main(ns) {
             }
         }
 
-        // 主循环 
+        /**
+         * 主循环 - 持续扫描目标并执行攻击
+         */
         async run() {
             if (!await this.initialize()) return;
 
@@ -345,6 +397,7 @@ export async function main(ns) {
     }
 
     // ===================== 执行入口 ===================== 
+    // 创建管理器实例并启动主循环
     const botManager = new BotManager(ns, CONFIG);
     await botManager.run();
 }
