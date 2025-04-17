@@ -533,4 +533,3 @@ export async function main(ns) {
     const botManager = new BotManager(ns, CONFIG);
     await botManager.run();
 }
-// ===================== 结束 =====================
