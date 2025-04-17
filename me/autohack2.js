@@ -3,6 +3,8 @@ export async function main(ns) {
     // ===================== 配置部分 ===================== 
     ns.disableLog("ALL");   // 禁用所有日志以保持控制台整洁
     ns.ui.openTail();       // 打开脚本日志窗口方便查看运行状态
+    ns.ui.setTailTitle(`AutoHack v1.0 [${ns.getScriptName()}]`);
+    ns.ui.resizeTail(600, 350);
 
     // 常量配置 - 控制脚本行为的各种参数
     const CONFIG = {
@@ -13,6 +15,8 @@ export async function main(ns) {
             GROW: "autoGrow.js",   // 增长脚本  
             WEAKEN: "autoWeaken.js" // 削弱脚本
         },
+        LOG_LEVEL: "INFO",    // 日志级别: DEBUG/INFO/WARN/ERROR
+        THREAD_STRATEGY: "BALANCED", // 线程分配策略: BALANCED/MAX_HACK/MAX_GROW/MAX_WEAKEN
         HACK_RATIO: 0.5,           // 入侵时获取金钱的比例
         SECURITY_THRESHOLD: 5,     // 安全等级阈值(超过最小值多少时需要削弱)
         MONEY_THRESHOLD: 0.9,      // 金钱比例阈值(低于最大值多少时需要增长)
@@ -22,7 +26,7 @@ export async function main(ns) {
         SCAN_INTERVAL: 5000,       // 服务器扫描间隔(毫秒)
         ACTION_INTERVAL: 1000,     // 攻击行动间隔(毫秒)
         MAX_TARGETS: 65,           // 同时攻击的最大目标数 
-        RESERVE_RAM: 32            // 为系统保留的RAM(GB)
+        RESERVE_RAM: 16            // 为系统保留的RAM(GB)
     };
 
     // ===================== 配套脚本定义 ===================== 
@@ -73,6 +77,18 @@ export async function main(ns) {
         }
 
         /**
+         * 根据日志级别打印消息
+         * @param {string} level - 日志级别
+         * @param {string} message - 日志消息
+         */
+        log(level, message) {
+            const levels = ["DEBUG", "INFO", "WARN", "ERROR"];
+            if (levels.indexOf(level) >= levels.indexOf(this.config.LOG_LEVEL)) {
+                this.ns.print(`${level}: ${message}`);
+            }
+        }
+
+        /**
          * 显示运行状态仪表盘
          * @param {Array} targets - 当前攻击目标数组
          */
@@ -85,11 +101,12 @@ export async function main(ns) {
 
             // 清屏并显示标题
             this.ns.clearLog();
-            this.ns.print(`🛠️  AutoHack 仪表盘 | 运行时间: ${runtime}`);
+            this.ns.print("=".repeat(60));
+            this.ns.print(`🛠️ AutoHack 仪表盘 | 运行时间: ${runtime}`);
             this.ns.print(`📊 资源: ${this.ns.formatRam(ramUsed)}/${this.ns.formatRam(ramMax)} (${ramPercent})`);
             this.ns.print(`💰 总收入: ${this.ns.formatNumber(this.stats.totalMoney).padEnd(8)}`);
             this.ns.print(`⚡ 操作统计: 入侵 ${this.ns.formatNumber(this.stats.totalHacks).padEnd(8)} | 增长 ${this.ns.formatNumber(this.stats.totalGrows).padEnd(8)} | 削弱 ${this.ns.formatNumber(this.stats.totalWeakens).padEnd(8)}`);
-            this.ns.print("=".repeat(50));
+            this.ns.print("=".repeat(60));
 
             // 显示目标状态
             if (targets && targets.length > 0) {
@@ -104,13 +121,13 @@ export async function main(ns) {
 
                     this.ns.print(
                         `${i + 1}.`.padStart(3) + `${target.hostname.padEnd(20)} ` +
-                        `💰 ${this.ns.formatPercent(money / maxMoney, 1).padEnd(6)}` +
-                        `🔒 ${security.toFixed(1)}/${minSecurity.toFixed(1)}`.padEnd(13) +
-                        `⭐ ${this.ns.formatNumber(target.score)}`
+                        `💰:${this.ns.formatPercent(money / maxMoney, 1).padStart(4, '_')} ` +
+                        `🔒:${security.toFixed(1)}/${minSecurity.toFixed(1)}`.padEnd(13) +
+                        `⭐:${this.ns.formatNumber(target.score)}`
                     );
                 }
             }
-            this.ns.print("=".repeat(50));
+            this.ns.print("=".repeat(60));
         }
 
         /**
@@ -301,15 +318,50 @@ export async function main(ns) {
         }
 
         /**
-         * 获取当前针对特定目标运行的脚本线程数
-         * @param {string} script - 脚本文件名
-         * @param {string} target - 目标服务器名称
-         * @returns {number} 总运行线程数
+         * 将攻击脚本复制到目标服务器
+         * @param {string} server - 目标服务器名称
+         * @returns {Promise<boolean>} 是否复制成功
          */
-        getRunningScripts(script, target) {
-            return this.ns.ps(this.config.HOME_SERVER)
-                .filter(proc => proc.filename === script && proc.args[0] === target)
-                .reduce((sum, proc) => sum + proc.threads, 0);
+        async copyScriptsToServer(server) {
+            try {
+                if (!this.ns.hasRootAccess(server)) return false;
+
+                // 确保服务器有足够空间
+                const scripts = Object.keys(SCRIPTS_CONTENT);
+                const totalSize = scripts.reduce((sum, script) =>
+                    sum + this.ns.getScriptRam(script), 0);
+
+                if (this.ns.getServerMaxRam(server) < totalSize) return false;
+
+                // 复制脚本
+                for (const script of scripts) {
+                    if (!this.ns.fileExists(script, server)) {
+                        await this.ns.scp(script, server, this.config.HOME_SERVER);
+                    }
+                }
+                return true;
+            } catch (error) {
+                this.ns.print(`×  复制脚本到 ${server} 失败: ${error}`);
+                return false;
+            }
+        }
+
+        /**
+         * 在目标服务器上运行脚本
+         * @param {string} script - 脚本文件名
+         * @param {string} targetServer - 目标服务器名称
+         * @param {number} threads - 线程数
+         * @param {string} hostname - 主机名参数
+         * @returns {Promise<boolean>} 是否执行成功
+         */
+        async runScriptOnServer(script, targetServer, threads, hostname) {
+            try {
+                const pid = this.ns.exec(script, targetServer, threads, hostname);
+                return pid !== 0;
+            } catch (error) {
+                this.log("ERROR", `在 ${targetServer} 上运行 ${script} 失败: ${error}`);
+                return false;
+            }
         }
 
         /**
@@ -325,15 +377,63 @@ export async function main(ns) {
                 const security = this.ns.getServerSecurityLevel(server);
                 const minSecurity = this.ns.getServerMinSecurityLevel(server);
 
-                // 计算可用线程（考虑已有运行的脚本）
-                const weakenThreads = Math.max(1, this.calculateThreads(this.config.SCRIPTS.WEAKEN, server) -
-                    this.getRunningScripts(this.config.SCRIPTS.WEAKEN, server));
+                // 复制脚本到目标服务器
+                await this.copyScriptsToServer(server);
 
-                const growThreads = Math.max(1, this.calculateThreads(this.config.SCRIPTS.GROW, server) -
-                    this.getRunningScripts(this.config.SCRIPTS.GROW, server));
+                // 根据策略计算线程分配
+                let weakenThreads, growThreads, hackThreads;
+                const totalThreads = this.calculateThreads(this.config.SCRIPTS.HACK, server);
 
-                const hackThreads = Math.max(1, this.calculateThreads(this.config.SCRIPTS.HACK, server) -
-                    this.getRunningScripts(this.config.SCRIPTS.HACK, server));
+                switch (this.config.THREAD_STRATEGY) {
+                    case "MAX_HACK":
+                        hackThreads = Math.floor(totalThreads * 0.7);
+                        weakenThreads = Math.floor(totalThreads * 0.2);
+                        growThreads = Math.floor(totalThreads * 0.1);
+                        break;
+                    case "MAX_GROW":
+                        growThreads = Math.floor(totalThreads * 0.7);
+                        weakenThreads = Math.floor(totalThreads * 0.2);
+                        hackThreads = Math.floor(totalThreads * 0.1);
+                        break;
+                    case "MAX_WEAKEN":
+                        weakenThreads = Math.floor(totalThreads * 0.7);
+                        growThreads = Math.floor(totalThreads * 0.2);
+                        hackThreads = Math.floor(totalThreads * 0.1);
+                        break;
+                    default: // BALANCED
+                        weakenThreads = Math.floor(totalThreads * 0.4);
+                        growThreads = Math.floor(totalThreads * 0.3);
+                        hackThreads = Math.floor(totalThreads * 0.3);
+                }
+
+                // 动态调整线程数确保不超过可用RAM
+                const availableRam = this.ns.getServerMaxRam(this.config.HOME_SERVER) -
+                    this.ns.getServerUsedRam(this.config.HOME_SERVER) -
+                    this.config.RESERVE_RAM;
+
+                // 计算实际可用的线程数
+                const weakenRam = this.getScriptRam(this.config.SCRIPTS.WEAKEN) * weakenThreads;
+                const growRam = this.getScriptRam(this.config.SCRIPTS.GROW) * growThreads;
+                const hackRam = this.getScriptRam(this.config.SCRIPTS.HACK) * hackThreads;
+
+                // 如果总RAM不足，按比例缩减线程
+                if (weakenRam + growRam + hackRam > availableRam) {
+                    const ratio = availableRam / (weakenRam + growRam + hackRam);
+                    weakenThreads = Math.max(1, Math.floor(weakenThreads * ratio));
+                    growThreads = Math.max(1, Math.floor(growThreads * ratio));
+                    hackThreads = Math.max(1, Math.floor(hackThreads * ratio));
+                }
+
+                // 尝试在目标服务器上运行脚本
+                if (weakenThreads > 0) {
+                    await this.runScriptOnServer(this.config.SCRIPTS.WEAKEN, server, weakenThreads, server);
+                }
+                if (growThreads > 0) {
+                    await this.runScriptOnServer(this.config.SCRIPTS.GROW, server, growThreads, server);
+                }
+                if (hackThreads > 0) {
+                    await this.runScriptOnServer(this.config.SCRIPTS.HACK, server, hackThreads, server);
+                }
 
                 // 优先削弱 
                 if (security > minSecurity + this.config.SECURITY_THRESHOLD && weakenThreads > 0) {
@@ -351,15 +451,39 @@ export async function main(ns) {
 
                 // 最后入侵 
                 if (hackThreads > 0) {
-                    const moneyStolen = this.ns.hackAnalyze(server) * hackThreads * money;
-                    this.stats.totalMoney += moneyStolen;
-                    this.stats.totalHacks += hackThreads;
-                    this.ns.exec(this.config.SCRIPTS.HACK, this.config.HOME_SERVER, hackThreads, server);
+                    try {
+                        const moneyStolen = this.ns.hackAnalyze(server) * hackThreads * money;
+                        this.stats.totalMoney += moneyStolen;
+                        this.stats.totalHacks += hackThreads;
+
+                        // 检查可用RAM
+                        const scriptRam = this.getScriptRam(this.config.SCRIPTS.HACK);
+                        const availableRam = this.ns.getServerMaxRam(this.config.HOME_SERVER) -
+                            this.ns.getServerUsedRam(this.config.HOME_SERVER) -
+                            this.config.RESERVE_RAM;
+
+                        // 动态调整线程数
+                        const maxPossibleThreads = Math.floor(availableRam / scriptRam);
+                        const actualThreads = Math.min(hackThreads, maxPossibleThreads);
+
+                        if (actualThreads > 0) {
+                            const pid = this.ns.exec(this.config.SCRIPTS.HACK, this.config.HOME_SERVER, actualThreads, server);
+                            if (pid === 0) {
+                                throw new Error("执行失败，可能RAM不足");
+                            }
+                        } else {
+                            this.log("WARN", `RAM不足，跳过入侵 ${server}`);
+                        }
+                    } catch (error) {
+                        this.log("ERROR", `入侵失败: ${server} - ${error}`);
+                        await this.ns.sleep(this.config.RETRY_DELAY);
+                    }
                 }
             } catch (error) {
                 this.ns.print(`×  攻击失败: ${target.hostname}  - ${error}`);
             }
         }
+
 
         /**
          * 主循环 - 持续扫描目标并执行攻击
@@ -368,6 +492,14 @@ export async function main(ns) {
             if (!await this.initialize()) return;
 
             this.ns.print("🚀  自动化攻击系统启动");
+
+            // 将脚本复制到所有可访问服务器
+            const servers = await this.scanServers();
+            for (const server of servers) {
+                if (server !== this.config.HOME_SERVER) {
+                    await this.copyScriptsToServer(server);
+                }
+            }
             while (true) {
                 try {
                     const targets = await this.getTargets();
@@ -401,3 +533,4 @@ export async function main(ns) {
     const botManager = new BotManager(ns, CONFIG);
     await botManager.run();
 }
+// ===================== 结束 =====================
