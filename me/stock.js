@@ -5,14 +5,14 @@
 export async function main(ns) {
     // ===================== 核心配置 =====================
     const CONFIG = {
-        RISK_PER_TRADE: 1,       // 单次交易的风险比例
-        MAX_EXPOSURE: 1,          // 最大风险敞口比例
+        RISK_PER_TRADE: 0.2,       // 单次交易的风险比例
+        MAX_EXPOSURE: 0.8,          // 最大风险敞口比例
         TREND_WINDOW: 8,            // 短期移动平均线窗口大小
         BASE_WINDOW: 40,            // 长期移动平均线窗口大小
         RSI_WINDOW: 14,             // RSI指标窗口大小
         VOLATILITY_FILTER: 0.015,   // 波动率过滤阈值
         STOP_LOSS: 0.05,           // 止损阈值
-        TAKE_PROFIT: 0.15,          // 止盈阈值
+        TAKE_PROFIT: 0.12,          // 止盈阈值
         ENABLE_SHORT: true,         // 是否启用卖空操作
         MAX_SHARE_RATIO: 0.4,      // 单股最大持仓比例
         FORECAST_BUY: 0.65,         // 做多预测阈值
@@ -279,8 +279,7 @@ export async function main(ns) {
 
         if (CONFIG.ENABLE_SHORT && analysis.trend === 'bear' && shortShares === 0) {
             const shortCondition = (
-                analysis.forecast < CONFIG.FORECAST_SELL &&
-                analysis.rsi > 70 &&
+                analysis.forecast < CONFIG.FORECAST_SELL - 0.05 &&
                 analysis.volatility < CONFIG.VOLATILITY_FILTER
             );
             if (shortCondition) {
@@ -305,7 +304,7 @@ export async function main(ns) {
         if (short > 0) {
             const currentPrice = analysis.askPrice; // 当前卖出价
             const profitRatio = (shortAvg - currentPrice) / shortAvg; // 计算盈利比率
-            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast > CONFIG.FORECAST_BUY + 0.05) || profitRatio >= CONFIG.TAKE_PROFIT && analysis.rsi < 30) {
+            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast > CONFIG.FORECAST_BUY + 0.05) || profitRatio >= CONFIG.TAKE_PROFIT) {
                 const bought = ns.stock.sellShort(sym, short); // 平仓卖空
                 if (bought > 0) logTransaction('Sell 📉', sym, -short, currentPrice, short * (shortAvg - currentPrice)); // 记录交易
             }
