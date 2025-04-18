@@ -3,6 +3,7 @@ export async function main(ns) {
     // ===================== 配置部分 ===================== 
     ns.disableLog("ALL");   // 禁用所有日志以保持控制台整洁
     ns.ui.openTail();       // 打开脚本日志窗口方便查看运行状态
+    ns.atExit(() => ns.ui.closeTail());
     ns.ui.setTailTitle(`AutoHack v1.0 [${ns.getScriptName()}]`);
     ns.ui.resizeTail(600, 420);
 
@@ -18,24 +19,24 @@ export async function main(ns) {
         LOG_LEVEL: "INFO",    // 日志级别: DEBUG/INFO/WARN/ERROR
         THREAD_STRATEGY: "BALANCED", // 线程分配策略: BALANCED/MAX_HACK/MAX_GROW/MAX_WEAKEN
         HACK_RATIO: 0.5,           // 入侵时获取金钱的比例
-            COLORS: {                  // 颜色配置 - 使用语义化名称和分组
-                DASHBOARD: {           // 仪表盘颜色组
-                    TITLE: "\u001b[38;5;45m",     // 亮青色 - 标题/主信息
-                    BORDER: "\u001b[38;5;240m",   // 深灰色 - 边框/分隔线
-                    STATS: "\u001b[38;5;220m",    // 亮黄色 - 统计数据/数值
-                    WARNING: "\u001b[38;5;196m",  // 亮红色 - 警告/错误信息
-                    SUCCESS: "\u001b[38;5;46m",   // 亮绿色 - 成功/完成状态
-                    NORMAL: "\u001b[38;5;255m",   // 亮白色 - 普通文本
-                    HIGHLIGHT: "\u001b[1;38;5;226m", // 亮黄加粗 - 强调文本
-                    SECONDARY: "\u001b[38;5;244m" // 中灰色 - 次要信息
-                },
-                TARGETS: {             // 目标服务器颜色组
-                    HIGH_VALUE: "\u001b[38;5;129m",   // 亮紫色 - 高价值目标(评分>1M)
-                    MEDIUM_VALUE: "\u001b[38;5;33m",  // 亮蓝色 - 中等价值(100K<评分≤1M)
-                    LOW_VALUE: "\u001b[38;5;87m",     // 亮青色 - 低价值目标(评分≤100K)
-                    DEFAULT: "\u001b[38;5;255m",      // 亮白色 - 默认目标颜色
-                    SPECIAL: "\u001b[38;5;208m"       // 橙色 - 特殊目标
-                },
+        COLORS: {                  // 颜色配置 - 使用语义化名称和分组
+            DASHBOARD: {           // 仪表盘颜色组
+                TITLE: "\u001b[38;5;45m",     // 亮青色 - 标题/主信息
+                BORDER: "\u001b[38;5;240m",   // 深灰色 - 边框/分隔线
+                STATS: "\u001b[38;5;220m",    // 亮黄色 - 统计数据/数值
+                WARNING: "\u001b[38;5;196m",  // 亮红色 - 警告/错误信息
+                SUCCESS: "\u001b[38;5;46m",   // 亮绿色 - 成功/完成状态
+                NORMAL: "\u001b[38;5;255m",   // 亮白色 - 普通文本
+                HIGHLIGHT: "\u001b[1;38;5;226m", // 亮黄加粗 - 强调文本
+                SECONDARY: "\u001b[38;5;244m" // 中灰色 - 次要信息
+            },
+            TARGETS: {             // 目标服务器颜色组
+                HIGH_VALUE: "\u001b[38;5;129m",   // 亮紫色 - 高价值目标(评分>1M)
+                MEDIUM_VALUE: "\u001b[38;5;33m",  // 亮蓝色 - 中等价值(100K<评分≤1M)
+                LOW_VALUE: "\u001b[38;5;87m",     // 亮青色 - 低价值目标(评分≤100K)
+                DEFAULT: "\u001b[38;5;255m",      // 亮白色 - 默认目标颜色
+                SPECIAL: "\u001b[38;5;208m"       // 橙色 - 特殊目标
+            },
             ACTIONS: {             // 新增: 操作类型颜色组
                 HACK: "\u001b[31m",        // 红色 - 入侵操作
                 GROW: "\u001b[32m",        // 绿色 - 增长操作  
@@ -187,22 +188,22 @@ export async function main(ns) {
                     const security = this.ns.getServerSecurityLevel(target.hostname);
                     const minSecurity = this.ns.getServerMinSecurityLevel(target.hostname);
 
-                // 根据目标价值选择颜色
-                const targetColor = target.score > 1000000 ? this.config.COLORS.TARGETS.HIGH_VALUE :
-                                  target.score > 100000 ? this.config.COLORS.TARGETS.MEDIUM_VALUE :
-                                  this.config.COLORS.TARGETS.LOW_VALUE;
-                
-                this.ns.print(
-                    `${targetColor}` +
-                    `${i + 1}.`.padStart(3) + `${target.hostname.padEnd(20)} ` +
-                    `💰:${this.ns.formatPercent(money / maxMoney, 1).padStart(4, '_')} ` +
-                    `🔒:${security.toFixed(1)}/${minSecurity.toFixed(1)}`.padEnd(13) +
-                    `⭐:${this.ns.formatNumber(target.score)}` +
-                    `${this.config.COLORS.DASHBOARD.NORMAL}`
-                );
+                    // 根据目标价值选择颜色
+                    const targetColor = target.score > 1000000 ? this.config.COLORS.TARGETS.HIGH_VALUE :
+                        target.score > 100000 ? this.config.COLORS.TARGETS.MEDIUM_VALUE :
+                            this.config.COLORS.TARGETS.LOW_VALUE;
+
+                    this.ns.print(
+                        `${targetColor}` +
+                        `${i + 1}.`.padStart(3) + `${target.hostname.padEnd(20)} ` +
+                        `💰:${this.ns.formatPercent(money / maxMoney, 1).padStart(5, '_')} ` +
+                        `🔒:${security.toFixed(1)}/${minSecurity.toFixed(1)}`.padEnd(13) +
+                        `⭐:${this.ns.formatNumber(target.score)}` +
+                        `${this.config.COLORS.DASHBOARD.NORMAL}`
+                    );
                 }
             }
-            this.ns.print("=".repeat(60));
+            this.ns.print(`${this.config.COLORS.DASHBOARD.BORDER}${"=".repeat(60)}`);
         }
 
         /**
