@@ -4,8 +4,8 @@ export async function main(ns) {
     ns.disableLog("ALL");   // 禁用所有日志以保持控制台整洁
     ns.ui.openTail();       // 打开脚本日志窗口方便查看运行状态
     ns.atExit(() => ns.ui.closeTail());
-    ns.ui.setTailTitle(`AutoHack v1.0 [${ns.getScriptName()}]`);
-    ns.ui.resizeTail(600, 420);
+    ns.ui.setTailTitle(`🗡AutoHack v2.0 [${ns.getScriptName()}]`);
+    ns.ui.resizeTail(600, 800);
 
     // 常量配置 - 控制脚本行为的各种参数
     const CONFIG = {
@@ -49,9 +49,9 @@ export async function main(ns) {
         MIN_SECURITY_LEVEL: 2,     // 最低安全等级(低于此值不再削弱)
         MAX_RETRIES: 3,            // 最大重试次数
         RETRY_DELAY: 5000,         // 重试延迟(毫秒)
-        SCAN_INTERVAL: 5000,       // 服务器扫描间隔(毫秒)
+        SCAN_INTERVAL: 1000,       // 服务器扫描间隔(毫秒)
         ACTION_INTERVAL: 1000,     // 攻击行动间隔(毫秒)
-        MAX_TARGETS: 65,           // 同时攻击的最大目标数 
+        MAX_TARGETS: 63,           // 同时攻击的最大目标数 
         RESERVE_RAM: 16            // 为系统保留的RAM(GB)
     };
 
@@ -180,7 +180,7 @@ export async function main(ns) {
             // 显示目标状态
             if (targets && targets.length > 0) {
                 this.ns.print(`🎯 当前目标 (${targets.length}个):`);
-                const maxTargets = Math.min(5, targets.length);
+                const maxTargets = Math.min(20, targets.length);
                 for (let i = 0; i < maxTargets; i++) {
                     const target = targets[i];
                     const money = this.ns.getServerMoneyAvailable(target.hostname);
