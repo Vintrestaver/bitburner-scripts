@@ -70,23 +70,23 @@ export async function main(ns) {
                 }
             }
 
-        // 特殊处理：当只有一个部门且没有发行股票时
-        if (corp.divisions.length < 2 && corp.numShares === corp.totalShares) {
-            const tobaccoDiv = corp.divisions.find(d => d.type === "Tobacco");
-            if (tobaccoDiv && tobaccoDiv.products.length > 2) {
-                try {
-                    await trickInvest(ns, tobaccoDiv);
-                } catch (e) {
-                    ns.print(`ERROR in investment trick: ${e}`);
-                    // 恢复产品销售
-                    for (const product of tobaccoDiv.products) {
-                        ns.corporation.sellProduct(tobaccoDiv.name, "Sector-12", product, "MAX", "MP", true);
+            // 特殊处理：当只有一个部门且没有发行股票时
+            if (corp.divisions.length < 2 && corp.numShares === corp.totalShares) {
+                const tobaccoDiv = corp.divisions.find(d => d.type === "Tobacco");
+                if (tobaccoDiv && tobaccoDiv.products.length > 2) {
+                    try {
+                        await trickInvest(ns, tobaccoDiv);
+                    } catch (e) {
+                        ns.print(`ERROR in investment trick: ${e}`);
+                        // 恢复产品销售
+                        for (const product of tobaccoDiv.products) {
+                            ns.corporation.sellProduct(tobaccoDiv.name, "Sector-12", product, "MAX", "MP", true);
+                        }
                     }
                 }
             }
-        }
 
-        await ns.sleep(5000);
+            await ns.sleep(5000);
         } catch (e) {
             ns.print(`ERROR in main loop: ${e}`);
             await ns.sleep(10000); // 等待更长时间后继续
@@ -449,7 +449,7 @@ function newProduct(ns, division) {
                 ns.print(`WARN: Could not get info for product ${product}`);
                 continue;
             }
-            
+
             if (prodInfo.developmentProgress < 100) {
                 ns.print(`${division.name} Product ${product} development: ${prodInfo.developmentProgress.toFixed(1)}%`);
                 return;

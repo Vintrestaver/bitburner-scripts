@@ -279,7 +279,8 @@ export async function main(ns) {
 
         if (CONFIG.ENABLE_SHORT && analysis.trend === 'bear' && shortShares === 0) {
             const shortCondition = (
-                analysis.forecast < CONFIG.FORECAST_SELL - 0.05 &&
+                analysis.forecast < CONFIG.FORECAST_SELL &&
+                analysis.rsi > 70 &&
                 analysis.volatility < CONFIG.VOLATILITY_FILTER
             );
             if (shortCondition) {
@@ -292,21 +293,34 @@ export async function main(ns) {
     function managePosition(sym, analysis) {
         const [long, longAvg, short, shortAvg] = ns.stock.getPosition(sym); // 获取持仓信息
 
+        // 计算所有持仓的平均收益
+        const activePositions = getActivePositions();
+        const avgProfit = activePositions.length > 0 ?
+            activePositions.reduce((sum, pos) => sum + pos.totalProfit, 0) / activePositions.length : 0;
+
         if (long > 0) {
             const currentPrice = analysis.bidPrice; // 当前买入价
             const profitRatio = (currentPrice - longAvg) / longAvg; // 计算盈利比率
-            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast < CONFIG.FORECAST_BUY - 0.05) || profitRatio >= CONFIG.TAKE_PROFIT && analysis.rsi > 70) {
+            const currentProfit = long * (currentPrice - longAvg);
+
+            // 修改卖出条件：保留止损，止盈改为高于平均收益1.2倍
+            if (((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast < CONFIG.FORECAST_BUY - 0.05) ||
+                (profitRatio > CONFIG.TAKE_PROFIT)) && analysis.rsi > 70) {
                 const sold = ns.stock.sellStock(sym, long); // 卖出股票
-                if (sold > 0) logTransaction('Sell 📈', sym, -long, currentPrice, long * (currentPrice - longAvg)); // 记录交易
+                if (sold > 0) logTransaction('Sell 📈', sym, -long, currentPrice, currentProfit); // 记录交易
             }
         }
 
         if (short > 0) {
             const currentPrice = analysis.askPrice; // 当前卖出价
             const profitRatio = (shortAvg - currentPrice) / shortAvg; // 计算盈利比率
-            if ((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast > CONFIG.FORECAST_BUY + 0.05) || profitRatio >= CONFIG.TAKE_PROFIT) {
+            const currentProfit = short * (shortAvg - currentPrice);
+
+            // 修改卖出条件：保留止损，止盈改为高于平均收益1.2倍
+            if (((profitRatio <= -CONFIG.STOP_LOSS && analysis.forecast > CONFIG.FORECAST_BUY + 0.05) ||
+                (profitRatio > CONFIG.TAKE_PROFIT)) && analysis.rsi < 30) {
                 const bought = ns.stock.sellShort(sym, short); // 平仓卖空
-                if (bought > 0) logTransaction('Sell 📉', sym, -short, currentPrice, short * (shortAvg - currentPrice)); // 记录交易
+                if (bought > 0) logTransaction('Sell 📉', sym, -short, currentPrice, currentProfit); // 记录交易
             }
         }
     }
