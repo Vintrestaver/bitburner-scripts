@@ -17,8 +17,10 @@ export async function main(ns) {
             WEAKEN: "autoWeaken.js" // 削弱脚本
         },
         LOG_LEVEL: "INFO",    // 日志级别: DEBUG/INFO/WARN/ERROR
-        THREAD_STRATEGY: "BALANCED", // 线程分配策略: BALANCED/MAX_HACK/MAX_GROW/MAX_WEAKEN
-        HACK_RATIO: 0.5,           // 入侵时获取金钱的比例
+        THREAD_STRATEGY: "DYNAMIC_AI", // 线程策略: DYNAMIC_AI/ADAPTIVE/BALANCED
+        HACK_RATIO: 0.5,           // 入侵基础比例
+        LEARNING_RATE: 0.01,       // 学习率
+        DECAY_FACTOR: 0.95,        // 收益衰减因子
         COLORS: {                  // 颜色配置 - 使用语义化名称和分组
             DASHBOARD: {           // 仪表盘颜色组
                 TITLE: "\u001b[38;5;45m",     // 亮青色 - 标题/主信息
@@ -112,6 +114,83 @@ export async function main(ns) {
             if (levels.indexOf(level) >= levels.indexOf(this.config.LOG_LEVEL)) {
                 this.ns.print(`${level}: ${message}`);
             }
+        }
+
+        /**
+         * 获取服务器实时状态
+         * @param {string} server 服务器名称
+         * @param {number} minSecurity 最低安全等级
+         * @returns {Object} 包含moneyRatio和securityDiff的对象
+         */
+        getServerStatus(server, minSecurity) {
+            return {
+                moneyRatio: this.ns.getServerMoneyAvailable(server) / this.ns.getServerMaxMoney(server),
+                securityDiff: this.ns.getServerSecurityLevel(server) - minSecurity
+            };
+        }
+
+        /**
+         * 计算动态线程总数
+         * @param {string} server 目标服务器
+         * @returns {number} 可用总线程数
+         */
+        calculateDynamicThreads(server) {
+            const availableRam = Math.max(0,
+                this.ns.getServerMaxRam(this.config.HOME_SERVER) - 
+                this.ns.getServerUsedRam(this.config.HOME_SERVER) - 
+                this.config.RESERVE_RAM);
+            
+            const scriptRam = (this.getScriptRam(this.config.SCRIPTS.HACK) + 
+                             this.getScriptRam(this.config.SCRIPTS.GROW) + 
+                             this.getScriptRam(this.config.SCRIPTS.WEAKEN)) / 3;
+            
+            return Math.floor(availableRam / scriptRam);
+        }
+
+        /**
+         * 计算Q值（动作价值）
+         * @param {string} server 目标服务器
+         * @param {number} moneyRatio 当前资金比例
+         * @param {number} securityDiff 安全等级差异
+         * @returns {Object} 各动作的权重值
+         */
+        calculateQValues(server, moneyRatio, securityDiff) {
+            // 基础Q值
+            let qValues = {
+                weaken: 0.4 + (securityDiff / 10),
+                grow: 0.3 + ((1 - moneyRatio) / 3),
+                hack: 0.3 + (moneyRatio / 3)
+            };
+
+            // 应用学习率
+            const learningRate = this.config.LEARNING_RATE;
+            qValues.weaken *= 1 + learningRate * (securityDiff > 0 ? 1 : -1);
+            qValues.grow *= 1 + learningRate * (moneyRatio < 0.9 ? 1 : -1);
+            qValues.hack *= 1 + learningRate * (moneyRatio > 0.5 ? 1 : -1);
+
+            // 标准化
+            const total = qValues.weaken + qValues.grow + qValues.hack;
+            qValues.weaken /= total;
+            qValues.grow /= total;
+            qValues.hack /= total;
+
+            return qValues;
+        }
+
+        /**
+         * 应用线程分配策略
+         * @param {number} totalThreads 总线程数
+         * @param {number} weakenWeight 削弱权重
+         * @param {number} growWeight 增长权重 
+         * @param {number} hackWeight 入侵权重
+         * @returns {Object} 各动作线程数
+         */
+        applyThreadAllocation(totalThreads, weakenWeight, growWeight, hackWeight) {
+            return {
+                weakenThreads: Math.max(1, Math.floor(totalThreads * weakenWeight)),
+                growThreads: Math.max(1, Math.floor(totalThreads * growWeight)),
+                hackThreads: Math.max(1, Math.floor(totalThreads * hackWeight))
+            };
         }
 
         /**
@@ -456,17 +535,15 @@ export async function main(ns) {
                 // 复制脚本到目标服务器
                 await this.copyScriptsToServer(server);
 
-                // 动态计算最优线程分配
-                const moneyRatio = money / maxMoney;
-                const securityDiff = security - minSecurity;
+                // 强化学习动态线程分配
+                const {moneyRatio, securityDiff} = this.getServerStatus(server, minSecurity);
+                const totalThreads = this.calculateDynamicThreads(server);
+                const qValues = this.calculateQValues(server, moneyRatio, securityDiff);
 
-                // 基础线程数计算
-                const totalThreads = this.calculateThreads(this.config.SCRIPTS.HACK, server);
-
-                // 根据服务器状态动态调整比例
-                let weakenWeight = 0.4 + (securityDiff / 10);
-                let growWeight = 0.3 + ((1 - moneyRatio) / 3);
-                let hackWeight = 0.3 + (moneyRatio / 3);
+                // 基于Q-Learning的权重分配
+                let weakenWeight = qValues.weaken;
+                let growWeight = qValues.grow * (1 - moneyRatio);
+                let hackWeight = qValues.hack * moneyRatio;
 
                 // 标准化权重
                 const totalWeight = weakenWeight + growWeight + hackWeight;
@@ -474,10 +551,10 @@ export async function main(ns) {
                 growWeight /= totalWeight;
                 hackWeight /= totalWeight;
 
-                // 计算线程数
-                let weakenThreads = Math.max(1, Math.floor(totalThreads * weakenWeight));
-                let growThreads = Math.max(1, Math.floor(totalThreads * growWeight));
-                let hackThreads = Math.max(1, Math.floor(totalThreads * hackWeight));
+                // 应用动态线程分配
+                let weakenThreads, growThreads, hackThreads;
+                ({weakenThreads, growThreads, hackThreads} = 
+                    this.applyThreadAllocation(totalThreads, weakenWeight, growWeight, hackWeight));
 
                 // 精确RAM利用率计算
                 const availableRam = this.ns.getServerMaxRam(this.config.HOME_SERVER) -
