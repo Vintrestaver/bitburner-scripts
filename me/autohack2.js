@@ -160,11 +160,15 @@ export async function main(ns) {
          * @returns {Object} 各动作的权重值
          */
         calculateQValues(server, moneyRatio, securityDiff) {
-            // 基础Q值
+            // 基础Q值 - 考虑服务器难度系数
+            const serverDifficulty = this.ns.getServerRequiredHackingLevel(server) / 
+                                   this.ns.getHackingLevel();
+            const difficultyFactor = Math.min(1, 1 / (1 + serverDifficulty));
+
             let qValues = {
-                weaken: 0.4 + (securityDiff / 10),
-                grow: 0.3 + ((1 - moneyRatio) / 3),
-                hack: 0.3 + (moneyRatio / 3)
+                weaken: 0.4 + (securityDiff / 10) * difficultyFactor,
+                grow: 0.3 + ((1 - moneyRatio) / 3) * difficultyFactor,
+                hack: 0.3 + (moneyRatio / 3) * difficultyFactor
             };
 
             // 应用学习率
@@ -538,8 +542,17 @@ export async function main(ns) {
          * @param {Object} target - 目标服务器对象
          */
         async attackTarget(target) {
+            const MAX_ATTACK_TIME = 30000; // 30秒超时
+            const startTime = Date.now();
+            
             try {
                 const server = target.hostname;
+                
+                // 检查是否超时
+                if (Date.now() - startTime > MAX_ATTACK_TIME) {
+                    this.log("WARN", `攻击 ${server} 超时，跳过`);
+                    return;
+                }
                 const money = this.ns.getServerMoneyAvailable(server);
                 const maxMoney = target.maxMoney;
                 const security = this.ns.getServerSecurityLevel(server);
