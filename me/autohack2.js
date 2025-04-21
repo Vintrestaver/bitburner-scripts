@@ -136,15 +136,20 @@ export async function main(ns) {
          */
         calculateDynamicThreads(server) {
             const availableRam = Math.max(0,
-                this.ns.getServerMaxRam(this.config.HOME_SERVER) - 
-                this.ns.getServerUsedRam(this.config.HOME_SERVER) - 
+                this.ns.getServerMaxRam(this.config.HOME_SERVER) -
+                this.ns.getServerUsedRam(this.config.HOME_SERVER) -
                 this.config.RESERVE_RAM);
-            
-            const scriptRam = (this.getScriptRam(this.config.SCRIPTS.HACK) + 
-                             this.getScriptRam(this.config.SCRIPTS.GROW) + 
-                             this.getScriptRam(this.config.SCRIPTS.WEAKEN)) / 3;
-            
-            return Math.floor(availableRam / scriptRam);
+
+            // 获取三种脚本的实际RAM使用量
+            const hackRam = this.getScriptRam(this.config.SCRIPTS.HACK);
+            const growRam = this.getScriptRam(this.config.SCRIPTS.GROW);
+            const weakenRam = this.getScriptRam(this.config.SCRIPTS.WEAKEN);
+
+            // 计算最小公倍数RAM，确保线程分配更精确
+            const lcmRam = Math.max(hackRam, growRam, weakenRam);
+
+            // 基于最耗RAM的脚本计算最大线程数
+            return Math.max(1, Math.floor(availableRam / lcmRam));
         }
 
         /**
@@ -311,10 +316,18 @@ export async function main(ns) {
          * @returns {number} 脚本占用的RAM(GB)
          */
         getScriptRam(script) {
-            if (!this.scriptRamCache[script]) {
-                this.scriptRamCache[script] = this.ns.getScriptRam(script);
+            // 添加缓存过期机制，防止长期运行后内存泄漏
+            const CACHE_TTL = 60000; // 1分钟缓存
+            const now = Date.now();
+
+            if (!this.scriptRamCache[script] ||
+                (now - (this.scriptRamCache[script].timestamp || 0)) > CACHE_TTL) {
+                this.scriptRamCache[script] = {
+                    value: this.ns.getScriptRam(script),
+                    timestamp: now
+                };
             }
-            return this.scriptRamCache[script];
+            return this.scriptRamCache[script].value;
         }
 
         /**
@@ -536,7 +549,7 @@ export async function main(ns) {
                 await this.copyScriptsToServer(server);
 
                 // 强化学习动态线程分配
-                const {moneyRatio, securityDiff} = this.getServerStatus(server, minSecurity);
+                const { moneyRatio, securityDiff } = this.getServerStatus(server, minSecurity);
                 const totalThreads = this.calculateDynamicThreads(server);
                 const qValues = this.calculateQValues(server, moneyRatio, securityDiff);
 
@@ -553,7 +566,7 @@ export async function main(ns) {
 
                 // 应用动态线程分配
                 let weakenThreads, growThreads, hackThreads;
-                ({weakenThreads, growThreads, hackThreads} = 
+                ({ weakenThreads, growThreads, hackThreads } =
                     this.applyThreadAllocation(totalThreads, weakenWeight, growWeight, hackWeight));
 
                 // 精确RAM利用率计算
