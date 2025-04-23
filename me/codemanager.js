@@ -10,19 +10,31 @@ export async function main(ns) {
     const THREAD_LIMIT = 10000;
     const CACHE_TTL = 5000; // 5秒缓存
 
-    // 文件缓存
-    let fileCache = { timestamp: 0, data: [] };
-
-    // 获取缓存的文件列表
-    function getCachedFiles(ns) {
-        const now = Date.now();
-        if (now - fileCache.timestamp > CACHE_TTL) {
-            fileCache = {
-                timestamp: now,
-                data: ns.ls('home')
-            };
+    // 智能缓存类
+    class ScriptCache {
+        constructor(ttl = 5000) {
+            this.ttl = ttl;
+            this.cache = { timestamp: 0, data: null };
         }
-        return fileCache.data;
+
+        get(ns, forceUpdate = false) {
+            const now = Date.now();
+            if (forceUpdate || now - this.cache.timestamp > this.ttl || !this.cache.data) {
+                this.cache = {
+                    timestamp: now,
+                    data: ns.ls('home')
+                };
+            }
+            return this.cache.data;
+        }
+    }
+
+    // 全局缓存实例
+    const scriptCache = new ScriptCache(CACHE_TTL);
+
+    // 获取缓存的文件列表（使用新的缓存类）
+    function getCachedFiles(ns) {
+        return scriptCache.get(ns);
     }
 
     // 过滤脚本文件
@@ -77,6 +89,47 @@ export async function main(ns) {
     // 删除文件功能
     // ========================
 
+    // 修改后的获取目录函数
+    function getScriptDirectories(ns) {
+        const dirSet = new Set(['/']);
+        const files = scriptCache.get(ns);
+
+        // 使用更高效的路径处理
+        files.forEach(fullPath => {
+            const normalized = normalizePath(fullPath);
+            let currentPath = '/';
+            normalized.split('/').filter(Boolean).forEach(part => {
+                currentPath += part + '/';
+                dirSet.add(currentPath);
+            });
+        });
+
+        return Array.from(dirSet).sort();
+    }
+
+    // 新增：统一确认对话框函数
+    async function showConfirmation(ns, options = {}) {
+        const {
+            title = "确认操作",
+            message = "确定要继续吗？",
+            confirmText = "确定",
+            cancelText = "取消",
+            type = "boolean"
+        } = options;
+
+        return await ns.prompt(
+            message,  // 第一个参数应为消息内容
+            {
+                type,
+                title,
+                choices: type === "boolean" ? undefined : [],
+                confirmText,
+                cancelText
+            }
+        );
+    }
+
+    // 修改后的删除文件函数（部分）
     async function handleDeleteFiles(ns) {
         const scriptDirs = getScriptDirectories(ns);
         const selectedDir = await selectDirectory(ns, scriptDirs);
@@ -89,8 +142,9 @@ export async function main(ns) {
 
         // 安全检查：根目录删除需要额外确认
         if (folderPath === '/') {
-            const confirmRoot = await ns.prompt("⚠️ 警告：即将删除home服务器所有文件！确认继续？", {
-                type: "boolean"
+            const confirmRoot = await showConfirmation(ns, {
+                title: "危险操作确认",
+                message: "⚠️ 警告：即将删除home服务器所有文件！确认继续？"
             });
             if (!confirmRoot) {
                 ns.toast("根目录删除操作已取消", "warning", 2000);
@@ -108,7 +162,10 @@ export async function main(ns) {
             `确定要删除以下文件吗？`,
             files.map(f => truncateName(f, 50))
         );
-        const confirmDelete = await ns.prompt(confirmMessage, { type: "boolean" });
+        const confirmDelete = await showConfirmation(ns, {
+            message: confirmMessage,
+            title: "确认删除文件"
+        });
 
         if (!confirmDelete) {
             ns.toast("操作已取消", "warning", 2000);
@@ -116,12 +173,9 @@ export async function main(ns) {
         }
 
         // 最终确认
-        const finalConfirm = await ns.prompt(
-            '⚠️ 最后一次确认：这将永久删除文件且不可恢复！输入 "DELETE" 确认操作',
-            { type: "text" }
-        );
+        const finalConfirm = await ns.prompt('⚠️ 最后一次确认：这将永久删除文件且不可恢复！输入 "DELETE" 确认操作', { type: "text" });
 
-        if (finalConfirm?.trim() !== "DELETE") {
+        if (String(finalConfirm || '').trim().toUpperCase() !== "DELETE") {
             ns.toast("操作已取消", "warning", 2000);
             return;
         }
@@ -244,17 +298,21 @@ export async function main(ns) {
 
         const actualPath = allScripts[scriptChoices.indexOf(selected)];
 
+        // 预加载脚本信息
+        const [scriptInfo] = await preloadScriptInfo(ns, [actualPath]);
+
         // 检查脚本是否存在
-        if (!ns.fileExists(actualPath)) {
+        if (!scriptInfo) {
             return ns.alert(`❌ 错误：脚本 ${actualPath} 不存在！`);
         }
 
-        // 检查脚本权限
-        if (!ns.isRunning(actualPath, 'home')) {
-            const canRun = await ns.prompt(`脚本 ${actualPath} 需要权限才能运行，是否继续？`, {
-                type: "boolean"
-            });
-            if (!canRun) return;
+        // 如果脚本正在运行，提示用户确认
+        if (scriptInfo.running) {
+            const confirm = await ns.prompt(
+                `脚本 ${actualPath} 已经在运行（使用 ${scriptInfo.ram.toFixed(2)} GB RAM），是否继续启动新实例？`,
+                { type: "boolean" }
+            );
+            if (!confirm) return;
         }
 
         // 获取线程数
@@ -320,22 +378,6 @@ export async function main(ns) {
     // 辅助函数
     // ========================
 
-    function getScriptDirectories(ns) {
-        const dirSet = new Set(['/']);
-        ns.ls('home').forEach(fullPath => {
-            const pathParts = fullPath.split('/').slice(0, -1);
-            let currentPath = '';
-            pathParts.forEach(part => {
-                if (!part) return;
-                currentPath += '/' + part;
-                dirSet.add(normalizePath(currentPath));
-            });
-        });
-        return Array.from(dirSet)
-            .sort((a, b) => a.localeCompare(b))
-            .map(p => normalizePath(p));
-    }
-
     async function selectDirectory(ns, dirs) {
         const dirMap = new Map();
         const choices = dirs.map(dir => {
@@ -386,4 +428,15 @@ export async function main(ns) {
         ns.tprint(`[DEBUG] 所有检测目录:\n${getScriptDirectories(ns).join('\n')}`);
         ns.tprint(`[DEBUG] 文件列表:\n${ns.ls('home').join('\n')}`);
     }
+}
+
+// 新增：脚本信息预加载
+async function preloadScriptInfo(ns, scriptPaths) {
+    return Promise.all(scriptPaths.map(async path => {
+        return {
+            path,
+            ram: ns.getScriptRam(path),
+            running: ns.isRunning(path, 'home')
+        };
+    }));
 }
