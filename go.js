@@ -1,9 +1,9 @@
-/**Author:
- * Discord:
+/**作者：
+ * Discord：
  * - Sphyxis
  *
- * Additional Contributers:
- * Discord:
+ * 额外贡献者：
+ * Discord：
  * - Stoneware
  * - gmcew
  * - eithel
@@ -15,12 +15,12 @@ import {
 } from './helpers.js'
 
 const argsSchema = [
-    ['cheats', true], // (Now true by default - but still an option for backwards compatibility) This is only possible if you have BN14.2
-    ['disable-cheats', false], // Set to true if you want to *not* use cheats for some reason.
-    ['cheat-chance-threshold', 0.9], // Don't cheat if our success chance is less than this
-    ['logtime', false], // Logs time time it takes for each player to take their move
-    ['runOnce', false], // Will only play one game if enabled
-    ['silent', false], // (Obsolete) This script used to automatically tail. Now if you want to do this, call with --tail like normal.
+    ['cheats', true], //（现在默认启用 - 但仍保留选项以兼容旧版）只有拥有 BN14.2 时才可能作弊
+    ['disable-cheats', false], // 如果你出于某种原因不想使用作弊功能，请设为 true。
+    ['cheat-chance-threshold', 0.9], // 如果我们的成功概率低于此值，则不作弊
+    ['logtime', false], // 记录每个玩家走棋所用时间
+    ['runOnce', false], // 启用后只进行一局游戏
+    ['silent', false], //（已废弃）此脚本曾自动 tail。现在如需 tail，请像平常一样用 --tail。
 ];
 
 export function autocomplete(data, args) {
@@ -28,8 +28,8 @@ export function autocomplete(data, args) {
     return [];
 }
 
-/** Main script entrypoint.
- * Note that to protect against "shared global memory", the entire script is wrapped in the body of the main function.
+/** 主脚本入口。
+ * 注意：为防止“共享全局内存”，整个脚本都包裹在 main 函数体内。
  * @param {NS} ns */
 export async function main(ns) {
     let cheats = false;
@@ -37,53 +37,53 @@ export async function main(ns) {
     let logtime = false;
     let runOnce = true;
     let silent = false;
-    let currentValidMovesTurn = 0; //The turn count that the currentValidMoves is valid for
+    let currentValidMovesTurn = 0; //当前回合 currentValidMoves 的有效回合数
     let turn = 0;
     let START = performance.now();
-    // Global variables initialized in this way get strong typing throughout
-    let board = (/**@returns{string[]}*/() => undefined)(); // The current board state
-    let currentValidMoves = (/**@returns{number[][]}*/() => undefined)(); //All valid moves for this turn
-    let currentValidContestedMoves = (/**@returns{number[][]}*/() => undefined)(); //All valid moves that occupy a contested space
-    let contested = (/**@returns{string[]}*/() => undefined)();
-    let validMove = (/**@returns{boolean[][]}*/() => undefined)();
-    let validLibMoves = (/**@returns{number[][]}*/() => undefined)();
-    let chains = (/**@returns{number[][]}*/() => undefined)();
-    let testBoard = (/**@returns{string[]}*/() => [])();
+    // 全局变量以这种方式初始化，在整个脚本中获得强类型
+    let board = (/**@returns{string[]}*/() => undefined)(); // 当前棋盘状态
+    let currentValidMoves = (/**@returns{number[][]}*/() => undefined)(); // 当前回合所有有效走法
+    let currentValidContestedMoves = (/**@returns{number[][]}*/() => undefined)(); // 当前回合所有可占据争夺点的走法
+    let contested = (/**@returns{string[]}*/() => undefined)(); // 争夺点信息
+    let validMove = (/**@returns{boolean[][]}*/() => undefined)(); // 有效走法布尔矩阵
+    let validLibMoves = (/**@returns{number[][]}*/() => undefined)(); // 每点的气数
+    let chains = (/**@returns{number[][]}*/() => undefined)(); // 连锁信息
+    let testBoard = (/**@returns{string[]}*/() => [])(); // 用于模式检测的测试棋盘
 
-    //X,O = Me, You  x, o = Anything but the other person or a blocking, "W" space is off the board, ? is anything goes
-    //B is blocking(Wall or you, not empty or enemy), b is blocking but could be enemy, A is All but . (Wall, Me, You, Blank)
-    //* is move here next if you can - no safeties
+    //X,O = 我, 对手  x, o = 除对方或阻挡/墙外，W 表示棋盘外，? 表示任意
+    //B 表示阻挡（墙或你，不是空或敌），b 表示阻挡但可能是敌，A 表示除 . 外所有（墙、我、你、空）
+    //* 表示下步必须下在此处 - 无安全性
 
     const disrupt4 = [
-        ["??b?", "?b.b", "b.*b", "?bb?"], //Pattern# Sphyxis - buy a turn #GREAT
-        ["?bb?", "b..b", "b*Xb", "?bb?"], //Pattern# Sphyxis - buy a turn #GREAT
-        ["?bb?", "b..b", "b.*b", "?bb?"], //Pattern# Sphyxis - buy a turn #GREAT
-        ["??b?", "?b.b", "?b*b", "??O?"], //Pattern# Sphyxis - Sacrifice to kill an eye
-        ["?bbb", "bb.b", "W.*b", "?oO?"], //Pattern# Sphyxis - 2x2 nook breatk
-        ["?bbb", "bb.b", "W.*b", "?Oo?"], //Pattern# Sphyxis - 2x2 nook break
-        [".bbb", "o*.b", ".bbb", "????"], //Pattern# Sphyxis - Dangling 2 break
+        ["??b?", "?b.b", "b.*b", "?bb?"], // 模式# Sphyxis - 争取一回合 #极佳
+        ["?bb?", "b..b", "b*Xb", "?bb?"], // 模式# Sphyxis - 争取一回合 #极佳
+        ["?bb?", "b..b", "b.*b", "?bb?"], // 模式# Sphyxis - 争取一回合 #极佳
+        ["??b?", "?b.b", "?b*b", "??O?"], // 模式# Sphyxis - 牺牲破眼
+        ["?bbb", "bb.b", "W.*b", "?oO?"], // 模式# Sphyxis - 2x2 角破坏
+        ["?bbb", "bb.b", "W.*b", "?Oo?"], // 模式# Sphyxis - 2x2 角破坏
+        [".bbb", "o*.b", ".bbb", "????"], // 模式# Sphyxis - 悬挂 2 破坏
     ];
     const disrupt5 = [
-        ["?bbb?", "b.*.b", "?bbb?", "?????", "?????"], //Pattern# Sphyxis - Convert to 1 eye
-        ["??OO?", "?b*.b", "?b..b", "??bb?", "?????"], //Pattern# Sphyxis - Buy time
-        ["?????", "??bb?", "?b*Xb", "?boob", "??bb?"], //Pattern# Sphyxis - Buy time
-        ["WWW??", "WWob?", "Wo*b?", "WWW??", "?????"], //Pattern# Sphyxis - 2x2 attack corner if possible
-        ["??b??", "?b.b?", "?b*b?", "?b.A?", "??b??"], //Pattern# Sphyxis - Break two eyes into 1, buy a turn
-        ["??b??", "?b.b?", "??*.b", "?b?b?", "?????"], //Pattern# Sphyxis - Break eyes, buy time
-        ["?WWW?", "WoOoW", "WOO*W", "W???W", "?????"], //Block 3x3 corner
-        ["?WWW?", "Wo*oW", "WOOOW", "W???W", "?????"], //Block 3x3 corner
+        ["?bbb?", "b.*.b", "?bbb?", "?????", "?????"], // 模式# Sphyxis - 转为单眼
+        ["??OO?", "?b*.b", "?b..b", "??bb?", "?????"], // 模式# Sphyxis - 拖延时间
+        ["?????", "??bb?", "?b*Xb", "?boob", "??bb?"], // 模式# Sphyxis - 拖延时间
+        ["WWW??", "WWob?", "Wo*b?", "WWW??", "?????"], // 模式# Sphyxis - 角上 2x2 攻击
+        ["??b??", "?b.b?", "?b*b?", "?b.A?", "??b??"], // 模式# Sphyxis - 破双眼为单眼，争取一回合
+        ["??b??", "?b.b?", "??*.b", "?b?b?", "?????"], // 模式# Sphyxis - 破眼，拖延
+        ["?WWW?", "WoOoW", "WOO*W", "W???W", "?????"], // 封锁 3x3 角
+        ["?WWW?", "Wo*oW", "WOOOW", "W???W", "?????"], // 封锁 3x3 角
     ];
     const def5 = [
-        ["?WW??", "WW.X?", "W.XX?", "WWW??", "?????"], //Pattern# Sphyxis - Eyes in a nook
-        ["WWW??", "WW.X?", "W.*X?", "WWW??", "?????"], //Pattern# Sphyxis - 2x2 corner contain #GREAT
-        ["BBB??", "BB.X?", "B..X?", "BBB??", "?????"], //Pattern# Sphyxis - 2x2 corner contain #GREAT
-        ["?WWW?", "W.*.W", "WXXXW", "?????", "?????"], //Take the 3x3 back corner
+        ["?WW??", "WW.X?", "W.XX?", "WWW??", "?????"], // 模式# Sphyxis - 角眼
+        ["WWW??", "WW.X?", "W.*X?", "WWW??", "?????"], // 模式# Sphyxis - 2x2 角防守 #极佳
+        ["BBB??", "BB.X?", "B..X?", "BBB??", "?????"], // 模式# Sphyxis - 2x2 角防守 #极佳
+        ["?WWW?", "W.*.W", "WXXXW", "?????", "?????"], // 占据 3x3 角
     ];
 
-    // Testing
+    // 测试
     //const opponent = ["Slum Snakes", "Tetrads", "Daedalus", "Illuminati"]
     //const opponent2 = ["????????????"]
-    // Original
+    // 原始
     const opponent = ["Netburners", "Slum Snakes", "The Black Hand", "Tetrads", "Daedalus", "Illuminati"];
     const opponent2 = ["Netburners", "Slum Snakes", "The Black Hand", "Tetrads", "Daedalus", "Illuminati", "????????????"];
 
@@ -92,13 +92,13 @@ export async function main(ns) {
     /** @param {NS} ns */
     async function start() {
         const runOptions = getConfiguration(ns, argsSchema);
-        if (!runOptions || (await instanceCount(ns)) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
+        if (!runOptions || (await instanceCount(ns)) > 1) return; // 防止脚本多实例启动，即使参数不同。
 
         logtime = runOptions.logtime;
         runOnce = runOptions.runOnce;
 
         const sourceFiles = await getActiveSourceFiles(ns, true);
-        // Enable cheats if we have SF14.2 or higher (unless the user disabled cheats).
+        // 如果拥有 SF14.2 或更高（且未禁用作弊），则启用作弊。
         cheats = !runOptions['disable-cheats'] && (sourceFiles[14] ?? 0) >= 2;
         cheatChanceThreshold = runOptions['cheat-chance-threshold'];
 
@@ -111,14 +111,14 @@ export async function main(ns) {
                 ranToCompletion = true;
             }
             catch (err) {
-                log(ns, `WARNING: go.js Caught (and suppressed) an unexpected error:\n${getErrorInfo(err)}`, false, 'warning');
-                log(ns, `INFO: Will sleep for 10 seconds than try playing again.`, false);
+                log(ns, `警告: go.js 捕获（并抑制）了一个意外错误:\n${getErrorInfo(err)}`, false, 'warning');
+                log(ns, `信息: 10 秒后重试。`, false);
                 await ns.sleep(10 * 1000);
             }
         }
     }
 
-    // Ram-dodging helpers (Allows the script to only require as much RAM as its most expensive function)
+    // Ram 规避助手（让脚本只需最大函数所需内存）
     /** @param {NS} ns @returns {Promise<string[]>} */
     async function go_getBoardState(ns) {
         return await getNsDataThroughFile(ns, `ns.go.getBoardState()`);
@@ -161,7 +161,7 @@ export async function main(ns) {
         let inProgress = false
         turn = 0
         START = performance.now()
-        //If we have already moved, jump the turn to 3 to get out of Opening Moves
+        //如果我们已经走过，跳到第 3 回合以跳过开局
         for (let x = 0; x < startBoard[0].length; x++) {
             for (let y = 0; y < startBoard[0].length; y++) {
                 if (startBoard[x][y] === "X") {
@@ -314,14 +314,14 @@ export async function main(ns) {
             validLibMoves = await go_analysis_getLiberties(ns);
             chains = await go_analysis_getChains(ns);
             const size = board[0].length
-            //Build a test board with walls
+            //构建带墙的测试棋盘
             let testWall = "W".repeat(size + 2);
             testBoard = [];
             testBoard.push(testWall);
             for (const b of board)
                 testBoard.push("W" + b + "W");
             testBoard.push(testWall);
-            //We have our test board
+            //我们已获得测试棋盘
 
             let results;
             if (turn < 3) {
@@ -332,7 +332,7 @@ export async function main(ns) {
                     if (results) break;
                 }
                 if (!results) {
-                    ns.print("Turn Passed")
+                    ns.print("回合跳过")
                     results = await ns.go.passTurn()
                 }
             }
@@ -372,31 +372,31 @@ export async function main(ns) {
      * @returns {boolean}
      */
     function isPattern(x, y, pattern) {
-        //Move the pattern around with x/y loops, check if pattern matches IF a move is placed
-        //We can assume that x and y are valid moves
+        //通过 x/y 循环移动模式，检查下子后是否匹配
+        //可假设 x, y 是有效走法
 
         const size = testBoard[0].length
         const patterns = getAllPatterns(pattern)
         const patternSize = pattern.length
 
         for (const patternCheck of patterns) {
-            //cx and cy - the spots of the pattern we are checking against the test board
-            //For, say a 3x3 pattern, we do a grid of 0,0 -> 2, 2
-            for (let cx = ((patternSize - 1) * -1); cx <= 0; cx++) { // We've added a wall around everything, so 0 is a wall
+            //cx 和 cy - 检查模式与测试棋盘的点
+            //对于 3x3 模式，范围为 0,0 -> 2,2
+            for (let cx = ((patternSize - 1) * -1); cx <= 0; cx++) { // 我们已在周围加了墙，所以 0 是墙
                 if (cx + x + 1 < 0 || cx + x + 1 > size - 1) continue
                 for (let cy = ((patternSize - 1) * -1); cy <= 0 - 1; cy++) {
-                    //We now have a cycle that will check each section of the grid against the pattern
-                    //Safety checks: We know 0,0 is safe, we were sent it, but each other section could be bad
+                    //我们现在有一个循环，检查网格的每个部分是否与模式匹配
+                    //安全检查：我们知道 0,0 是安全的，它是传入的点，但其他部分可能不安全
                     if (cy + y + 1 < 0 || cy + y + 1 > size - 1) continue
                     let count = 0
                     let abort = false
                     for (let px = 0; px < patternSize && !abort; px++) {
-                        if (x + cx + px + 1 < 0 || x + cx + px + 1 >= size) {  //Don't go off grid
+                        if (x + cx + px + 1 < 0 || x + cx + px + 1 >= size) {  //不越界
                             abort = true
                             break
                         }
                         for (let py = 0; py < patternSize && !abort; py++) {
-                            if (y + cy + py + 1 < 0 || y + cy + py + 1 >= size) { //Are we off the map?
+                            if (y + cy + py + 1 < 0 || y + cy + py + 1 >= size) { //是否越界？
                                 abort = true
                                 break
                             }
@@ -408,19 +408,19 @@ export async function main(ns) {
                                 abort = true
                                 break
                             }
-                            //We now have a cycles for each spot in the pattern
-                            //0,0 -> 2,2 for a 3x3
+                            //我们现在有一个循环，检查模式的每个点
+                            //对于 3x3，范围为 0,0 -> 2,2
                             switch (patternCheck[px][py]) {
                                 case "X":
                                     if (testBoard[cx + x + 1 + px][cy + y + 1 + py] === "X" || (cx + px === 0 && cy + py === 0 && testBoard[cx + x + 1 + px][cy + y + 1 + py] === ".")) {
                                         count++
                                     }
                                     else if (cx + px === 0 && cy + py === 0) {
-                                        count++ // Our placement piece
+                                        count++ // 我们的放置点
                                     }
                                     else abort = true
                                     break
-                                case "*": // Special case.  We move here next or break the test
+                                case "*": // 特殊情况。我们下步下在此处或中断测试
                                     if (testBoard[cx + x + 1 + px][cy + y + 1 + py] === "." && cx + px === 0 && cy + py === 0) {
                                         count++
                                     }
@@ -482,6 +482,7 @@ export async function main(ns) {
      * @param {string[]} pattern
      * @returns {string[][]} */
     function getAllPatterns(pattern) {
+        // 获取所有旋转和镜像的模式
         const rotations = [
             pattern,
             rotate90Degrees(pattern),
@@ -491,17 +492,19 @@ export async function main(ns) {
         return [...rotations, ...rotations.map(verticalMirror)]
     }
 
-    //Special thanks to @gmcew for the next 2 functions!
+    //特别感谢 @gmcew 提供以下两个函数！
     /** @param {NS} ns
      * @param {string[]} pattern
      * @returns {string[]} */
     function rotate90Degrees(pattern) {
+        // 旋转 90 度
         return pattern.map((val, index) => pattern.map(row => row[index]).reverse().join(""))
     }
     /** @param {NS} ns
      * @param {string[]} pattern
      * @returns {string[]} */
     function verticalMirror(pattern) {
+        // 垂直镜像
         return pattern.toReversed();
     }
 
@@ -518,10 +521,10 @@ export async function main(ns) {
         for (let x = 0; x < size - 1; x++)
             for (let y = 0; y < size - 1; y++) {
                 if (contested[x][y] === "X" || board[x][y] !== "O" || validLibMoves[x][y] !== 2 || checked.has(JSON.stringify([x, y]))) continue
-                //Is it the enemy, with 2 libs (we can kill) and we have not checked this spot and the chain is large enough
+                //是否为敌方，气数为 2（可杀），且未检查过，链足够大
                 const chain = getChainValue(x, y, "O")
                 if (chain < minKilled) continue
-                //We have a winner!  Check all it's spots and find the 2 killing blows.  Add the checked spots to the checked list so we don't recheck
+                //我们找到一个目标！检查所有点，找出两步杀棋。将已检查点加入 checked，避免重复
                 checked.add(JSON.stringify([x, y]))
                 const enemySearch = new Set
                 const move1 = []
@@ -529,14 +532,14 @@ export async function main(ns) {
                 enemySearch.add(JSON.stringify([x, y]))
                 for (const explore of enemySearch) {
                     const [fx, fy] = JSON.parse(explore)
-                    //Find your eyes
+                    //找眼
                     if (board[fx][fy] === ".") {
                         move1.length ? move2.push([fx, fy]) : move1.push([fx, fy])
                         checked.add(JSON.stringify([fx, fy]))
                         continue
                     }
 
-                    //Find more of yourself to search...
+                    //找更多自己以搜索...
                     if (fx < size - 1 && ["O", "."].includes(board[fx + 1][fy])) {
                         enemySearch.add(JSON.stringify([fx + 1, fy]))
                         checked.add(JSON.stringify([fx, fy]))
@@ -553,7 +556,7 @@ export async function main(ns) {
                         enemySearch.add(JSON.stringify([fx, fy + 1]))
                         checked.add(JSON.stringify([fx, fy]))
                     }
-                } // End of searching the enemy
+                } // 结束搜索敌方
 
                 if (chain > highValue) {
                     highValue = chain
@@ -567,9 +570,9 @@ export async function main(ns) {
                     const mv2 = move2.pop()
                     moveOptions.push([mv1[0], mv1[1], mv2[0], mv2[1]])
                 }
-            } // Search whole board
+            } // 搜索整个棋盘
 
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -582,7 +585,7 @@ export async function main(ns) {
         const moveOptions = []
         const size = board[0].length
         let highValue = 1
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves(true)
         for (const [x, y] of moves) {
             if (contested[x][y] === "X" || validLibMoves[x][y] !== -1) continue
@@ -590,7 +593,7 @@ export async function main(ns) {
             let count = 0
             let chains = 0
 
-            //We are only checking up, down, left and right
+            //只检查上下左右
             if (x > 0 && board[x - 1][y] === "O" && validLibMoves[x - 1][y] === 1) {
                 count++
                 chains += getChainValue(x - 1, y, "O")
@@ -618,7 +621,7 @@ export async function main(ns) {
             }
             else if (result === highValue) moveOptions.push([x, y]);
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -631,22 +634,22 @@ export async function main(ns) {
         const moveOptions = []
         const size = board[0].length
         let highValue = 0
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves()
         for (const [x, y] of moves) {
             const surround = getSurroundLibs(x, y, "X")
             const myEyes = getEyeValue(x, y, "X")
-            if (surround + myEyes < 2) continue //Abort.  Let it go, let it go...
+            if (surround + myEyes < 2) continue //放弃。随它去吧...
 
             if (validLibMoves[x][y] === -1) {
                 let count = 0
-                //We are only checking up, down, left and right
+                //只检查上下左右
                 if (x > 0 && validLibMoves[x - 1][y] === 1 && board[x - 1][y] === "X") count += getChainValue(x - 1, y, "X")
                 if (x < size - 1 && validLibMoves[x + 1][y] === 1 && board[x + 1][y] === "X") count += getChainValue(x + 1, y, "X")
                 if (y > 0 && validLibMoves[x][y - 1] === 1 && board[x][y - 1] === "X") count += getChainValue(x, y - 1, "X")
                 if (y < size - 1 && validLibMoves[x][y + 1] === 1 && board[x][y + 1] === "X") count += getChainValue(x, y + 1, "X")
                 if (count === 0 || count < savedMin) continue
-                //Just HOW effective will this move be?  Counter attack if we can.
+                //此走法有多有效？如能反击则反击。
                 count *= surround
 
                 if (count > highValue) {
@@ -657,7 +660,7 @@ export async function main(ns) {
                 else if (count === highValue) moveOptions.push([x, y])
             }
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -667,16 +670,15 @@ export async function main(ns) {
     /** @param {NS} ns
      * @returns {{coords: number[]; msg: string;}} */
     function getRandomCounterLib() {
-        //Advanced strategy
-        //If we have a chain that's going to die, and a hanging lib attached to it
-        //Find that hanging lib and kill it to save the chain
+        // 高级策略
+        // 如果有即将被吃掉的链，且有挂着的气，找出并断气救链
         const size = board[0].length
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves()
-        const movesAvailable = new Set //Contains the empty squares that we are looking to see if we should take
+        const movesAvailable = new Set //包含我们要检查是否应占据的空点
         const friendlyToCheckForOpp = new Set
         for (const [x, y] of moves) {
-            //We are checking up, down, left and right first
+            //先检查上下左右
             if (x > 0 && validLibMoves[x - 1][y] === 1 && board[x - 1][y] === "X") {
                 movesAvailable.add(JSON.stringify([x, y]))
                 friendlyToCheckForOpp.add(JSON.stringify([x - 1, y]))
@@ -694,8 +696,8 @@ export async function main(ns) {
                 friendlyToCheckForOpp.add(JSON.stringify([x, y + 1]))
             }
         }
-        //Shortcut.  While there's 1, is it THE one?
-        //We know that 1 side of this is a friendly with 1 lib at risk.  Is another side the enemy?
+        //捷径。虽然有 1 个，但它是 THE one 吗？
+        //我们知道这条链的一侧是有 1 气的友军，另一侧是敌方吗？
         for (const explore of movesAvailable) {
             const [fx, fy] = JSON.parse(explore)
             if (!validMove[fx][fy]) continue
@@ -725,7 +727,7 @@ export async function main(ns) {
             }
         }
         const enemiesToSearch = new Set
-        //We have our empty chain.  Look through him to find adjoining O's that can be killed and other friendies
+        //我们有空链。遍历它，找相邻 O 可杀及其他友军
         for (const explore of friendlyToCheckForOpp) {
             const [fx, fy] = JSON.parse(explore)
             if (fx < size - 1 && board[fx + 1][fy] === "O" && validLibMoves[fx + 1][fy] === 1) enemiesToSearch.add(JSON.stringify([fx + 1, fy]))
@@ -779,14 +781,14 @@ export async function main(ns) {
         const moveOptions = []
         const size = board[0].length;
         let highValue = 0
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves(true)
         for (const [x, y] of moves) {
             const surroundLibs = getSurroundLibs(x, y, "X")
             const enemySurroundLibs = getSurroundLibs(x, y, "O")
             if (contested[x][y] !== "?" || surroundLibs <= 2 || createsLib(x, y, "X") || enemySurroundLibs <= 1) continue
             let count = 0
-            //We are only checking up, down, left and right.  Don't expand if you're surrounded by friendlies
+            //只检查上下左右。若被友军包围则不扩展
             if (x > 0 && board[x - 1][y] === "X") count++
             if (x < size - 1 && board[x + 1][y] === "X") count++
             if (y > 0 && board[x][y - 1] === "X") count++
@@ -807,7 +809,7 @@ export async function main(ns) {
             }
             else if (rank === highValue) moveOptions.push([x, y]);
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -820,7 +822,7 @@ export async function main(ns) {
         const moveOptions = [];
         const size = board[0].length;
         let highValue = 1
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves()
         for (const [x, y] of moves) {
             if ((onlyContested && contested[x][y] !== "?") || createsLib(x, y, "X")) continue
@@ -829,8 +831,7 @@ export async function main(ns) {
             let up = 0
             let down = 0
 
-            //We are only checking up, down, left and right
-            //We are checking for linking chains of friendlies, filtering out those already checked
+            //只检查上下左右。检查友军链，过滤已检查的
             let checkedChains = []
             if (x < size - 1 && board[x + 1][y] === "X" && validLibMoves[x + 1][y] === libRequired) {
                 right = getChainValue(x + 1, y, "X")
@@ -875,7 +876,7 @@ export async function main(ns) {
             }
             else if (rank === highValue) moveOptions.push([x, y]);
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -1056,7 +1057,7 @@ export async function main(ns) {
         if (x < size - 1 && board[x + 1][y] === ".") checks.add(JSON.stringify([x + 1, y]))
         if (y > 0 && board[x][y - 1] === ".") checks.add(JSON.stringify([x, y - 1]))
         if (y < size - 1 && board[x][y + 1] === ".") checks.add(JSON.stringify([x, y + 1]))
-        //Now, check the liberty values of all the checks
+        //现在，检查所有 checks 的气数
         for (const check of checks) {
             const [x, y] = JSON.parse(check)
             surround += getSurroundLibs(x, y, player)
@@ -1087,7 +1088,7 @@ export async function main(ns) {
         const moveOptions2 = []
         const size = board[0].length
 
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         let bestRank = 0
         const moves = getAllValidMoves(true)
         for (const [x, y] of moves) {
@@ -1110,7 +1111,7 @@ export async function main(ns) {
                 moveOptions2.push([x, y])
             }
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length);
         const randomIndex2 = Math.floor(Math.random() * moveOptions2.length);
         return moveOptions[randomIndex] ? {
@@ -1127,7 +1128,7 @@ export async function main(ns) {
         const moveOptions = [];
         const size = board[0].length;
         let highestValue = 0
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves(true)
         for (const [x, y] of moves) {
             if (createsLib(x, y, "X")) continue
@@ -1162,7 +1163,7 @@ export async function main(ns) {
                 moveOptions.push([x, y]);
             }
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -1175,7 +1176,7 @@ export async function main(ns) {
         const moveOptions = [];
         const size = board[0].length;
         let highestValue = 0
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves(true)
         for (const [x, y] of moves) {
             if (createsLib(x, y, "X")) continue
@@ -1212,7 +1213,7 @@ export async function main(ns) {
                 moveOptions.push([x, y]);
             }
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -1224,7 +1225,7 @@ export async function main(ns) {
     function attackGrowDragon(requiredEyes, killLib = false) {
         const moveOptions = [];
         let highestValue = 0
-        // Look through all the points on the board
+        // 遍历棋盘所有点
         const moves = getAllValidMoves(true)
         for (const [x, y] of moves) {
             if (contested[x][y] !== "?" || createsLib(x, y, "X")) continue
@@ -1235,7 +1236,7 @@ export async function main(ns) {
             if (enemyLibs === 1 && !killLib) continue
             const enemyChains = getChainAttackFull(x, y)
             const myEyes = getEyeValueFull(x, y, "X")
-            if (myEyes < requiredEyes) continue // || count === 3) continue
+            if (myEyes < requiredEyes) continue // 或 count === 3 继续
             const result = enemyLibs * enemyChains // surround * enemyLibs * myChains *  /*freeSpace * */ enemyEyes * enemyChains
 
             if (result > highestValue) {
@@ -1248,7 +1249,7 @@ export async function main(ns) {
                 moveOptions.push([x, y])
             }
         }
-        // Choose one of the found moves at random
+        // 随机选一个找到的走法
         const randomIndex = Math.floor(Math.random() * moveOptions.length)
         return moveOptions[randomIndex] ? {
             coords: moveOptions[randomIndex],
@@ -1304,7 +1305,7 @@ export async function main(ns) {
         ns.printf("%s", attack.msg)
         const results = await go_makeMove(ns, x, y);
         let END = performance.now()
-        if (logtime) ns.printf("Time: Me: %s  Them: %s", ns.tFormat(mid - START, true), ns.tFormat(END - mid, true))
+        if (logtime) ns.printf("用时: 我: %s  对手: %s", ns.tFormat(mid - START, true), ns.tFormat(END - mid, true))
         START = performance.now()
         return results
     }
@@ -1319,9 +1320,9 @@ export async function main(ns) {
         try {
             let mid = performance.now()
             const results = await go_cheat_playTwoMoves(ns, s1x, s1y, s2x, s2y)
-            ns.printf("%s  Chance: %.2f%%  Result: %s", attack.msg, chance * 100, results.type);
+            ns.printf("%s  概率: %.2f%%  结果: %s", attack.msg, chance * 100, results.type);
             let END = performance.now()
-            if (logtime) ns.printf("Time: Me: %s  Them: %s", ns.tFormat(mid - START, true), ns.tFormat(END - mid, true))
+            if (logtime) ns.printf("用时: 我: %s  对手: %s", ns.tFormat(mid - START, true), ns.tFormat(END - mid, true))
             START = performance.now()
             return results
         }
@@ -1339,7 +1340,7 @@ export async function main(ns) {
                 }
             }
 
-        //Moves contains a randomized array of x,y
+        //Moves 随机排序
         moves = moves.sort(() => Math.random() - Math.random())
         contestedMoves = contestedMoves.sort(() => Math.random() - Math.random())
         currentValidMoves = moves
