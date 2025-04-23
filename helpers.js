@@ -1,8 +1,8 @@
 /**
- * Return a formatted representation of the monetary amount using scale symbols (e.g. $6.50M)
- * @param {number} num - The number to format
- * @param {number=} maxSignificantFigures - (default: 6) The maximum significant figures you wish to see (e.g. 123, 12.3 and 1.23 all have 3 significant figures)
- * @param {number=} maxDecimalPlaces - (default: 3) The maximum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
+ * 使用单位符号(如 $6.50M)返回格式化后的货币金额
+ * @param {number} num - 要格式化的数字
+ * @param {number=} maxSignificantFigures - (默认: 6) 您希望看到的最大有效数字(例如 123、12.3 和 1.23 都有 3 个有效数字)
+ * @param {number=} maxDecimalPlaces - (默认: 3) 您希望看到的最大小数位数,无论有效数字如何(例如 12.3、1.2、0.1 都有 1 位小数)
  **/
 export function formatMoney(num, maxSignificantFigures = 6, maxDecimalPlaces = 3) {
     let numberShort = formatNumberShort(num, maxSignificantFigures, maxDecimalPlaces);
@@ -12,10 +12,10 @@ export function formatMoney(num, maxSignificantFigures = 6, maxDecimalPlaces = 3
 const symbols = ["", "k", "m", "b", "t", "q", "Q", "s", "S", "o", "n", "e33", "e36", "e39"];
 
 /**
- * Return a formatted representation of the monetary amount using scale sympols (e.g. 6.50M)
- * @param {number} num - The number to format
- * @param {number=} maxSignificantFigures - (default: 6) The maximum significant figures you wish to see (e.g. 123, 12.3 and 1.23 all have 3 significant figures)
- * @param {number=} maxDecimalPlaces - (default: 3) The maximum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
+ * 使用缩放符号返回格式化后的数字表示(例如 6.50M)
+ * @param {number} num - 要格式化的数字
+ * @param {number=} maxSignificantFigures - (默认: 6) 您希望看到的最大有效数字(例如 123、12.3 和 1.23 都有 3 个有效数字)
+ * @param {number=} maxDecimalPlaces - (默认: 3) 您希望看到的最大小数位数,无论有效数字如何(例如 12.3、1.2、0.1 都有 1 位小数)
  **/
 export function formatNumberShort(num, maxSignificantFigures = 6, maxDecimalPlaces = 3) {
     if (Math.abs(num) > 10 ** (3 * symbols.length)) // If we've exceeded our max symbol, switch to exponential notation
@@ -25,7 +25,7 @@ export function formatNumberShort(num, maxSignificantFigures = 6, maxDecimalPlac
     return ((sign < 0) ? "-" : "") + num.toFixed(Math.max(0, Math.min(maxDecimalPlaces, maxSignificantFigures - Math.floor(1 + Math.log10(num))))) + symbols[i];
 }
 
-/** Convert a shortened number back into a value */
+/** 将缩写数字转换回数值 */
 export function parseShortNumber(text = "0") {
     let parsed = Number(text);
     if (!isNaN(parsed)) return parsed;
@@ -36,10 +36,10 @@ export function parseShortNumber(text = "0") {
 }
 
 /**
- * Return a number formatted with the specified number of significant figures or decimal places, whichever is more limiting.
- * @param {number} num - The number to format
- * @param {number=} minSignificantFigures - (default: 6) The minimum significant figures you wish to see (e.g. 123, 12.3 and 1.23 all have 3 significant figures)
- * @param {number=} minDecimalPlaces - (default: 3) The minimum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
+ * 返回一个以指定有效数字或小数位数格式化的数字,取更具限制性的一个
+ * @param {number} num - 要格式化的数字
+ * @param {number=} minSignificantFigures - (默认: 6) 您希望看到的最小有效数字(例如 123、12.3 和 1.23 都有 3 个有效数字)
+ * @param {number=} minDecimalPlaces - (默认: 3) 您希望看到的最小小数位数,无论有效数字如何(例如 12.3、1.2、0.1 都有 1 位小数)
  **/
 export function formatNumber(num, minSignificantFigures = 3, minDecimalPlaces = 1) {
     return num == 0.0 ? "0" : num.toFixed(Math.max(minDecimalPlaces, Math.max(0, minSignificantFigures - Math.ceil(Math.log10(num)))));
@@ -47,7 +47,7 @@ export function formatNumber(num, minSignificantFigures = 3, minDecimalPlaces = 
 
 const memorySuffixes = ["GB", "TB", "PB", "EB"];
 
-/** Formats some RAM amount as a round number of GB/TB/PB/EB with thousands separators e.g. `1.028 TB` */
+/** 将内存数量格式化为GB/TB/PB/EB的整数,带千位分隔符,例如 `1.028 TB` */
 export function formatRam(num, printGB) {
     if (printGB) {
         return `${Math.round(num).toLocaleString('en')} GB`;
@@ -64,10 +64,12 @@ export function formatRam(num, printGB) {
     return formatted.toLocaleString('en') + " " + memorySuffixes[idx];
 }
 
-/** Return a datatime in ISO format */
+/** 以ISO格式返回日期时间 */
 export function formatDateTime(datetime) { return datetime.toISOString(); }
 
-/** Format a duration (in milliseconds) as e.g. '1h 21m 6s' for big durations or e.g '12.5s' / '23ms' for small durations */
+/** 格式化持续时间(以毫秒为单位)
+ * 对于较大的持续时间,格式为'1h 21m 6s'
+ * 对于较小的持续时间,格式为'12.5s' / '23ms' */
 export function formatDuration(duration) {
     if (duration < 1000) return `${duration.toFixed(0)}ms`
     if (!isFinite(duration)) return 'forever (Infinity)'
@@ -94,60 +96,59 @@ export function formatDuration(duration) {
     return portions.join(' ');
 }
 
-/** Generate a hashCode for a string that is pretty unique most of the time */
+/** 为字符串生成一个大部分时候都相当唯一的哈希码 */
 export function hashCode(s) { return s.split("").reduce(function (a, b) { a = ((a << 5) - a) + b.charCodeAt(0); return a & a }, 0); }
 
 /** @param {NS} ns **/
 export function disableLogs(ns, listOfLogs) { ['disableLog'].concat(...listOfLogs).forEach(log => checkNsInstance(ns, '"disableLogs"').disableLog(log)); }
 
-/** Joins all arguments as components in a path, e.g. pathJoin("foo", "bar", "/baz") = "foo/bar/baz" **/
+/** 将所有参数作为路径组件连接,例如 pathJoin("foo", "bar", "/baz") = "foo/bar/baz" **/
 export function pathJoin(...args) {
     return args.filter(s => !!s).join('/').replace(/\/\/+/g, '/');
 }
 
-/** Gets the path for the given local file, taking into account optional subfolder relocation via git-pull.js **/
+/** 获取给定本地文件的路径,考虑通过git-pull.js的可选子文件夹重定位 **/
 export function getFilePath(file) {
     const subfolder = '';  // git-pull.js optionally modifies this when downloading
     return pathJoin(subfolder, file);
 }
 
-// FUNCTIONS THAT PROVIDE ALTERNATIVE IMPLEMENTATIONS TO EXPENSIVE NS FUNCTIONS
-// VARIATIONS ON NS.RUN
+// 提供替代昂贵的NS函数的函数
+// NS.RUN的变体
 
 /** @param {NS} ns
- *  Use where a function is required to run a script and you have already referenced ns.run in your script **/
+ * 当需要运行脚本的函数且您的脚本中已经引用了ns.run时使用 **/
 export function getFnRunViaNsRun(ns) { return checkNsInstance(ns, '"getFnRunViaNsRun"').run; }
 
 /** @param {NS} ns
- *  Use where a function is required to run a script and you have already referenced ns.exec in your script **/
+ * 当需要运行脚本的函数且您的脚本中已经引用了ns.exec时使用 **/
 export function getFnRunViaNsExec(ns, host = "home") {
     checkNsInstance(ns, '"getFnRunViaNsExec"');
     return function (scriptPath, ...args) { return ns.exec(scriptPath, host, ...args); }
 }
-// VARIATIONS ON NS.ISRUNNING
+// NS.ISRUNNING的变体
 
 /** @param {NS} ns
- *  Use where a function is required to run a script and you have already referenced ns.run in your script  */
+ * 当需要运行脚本的函数且您的脚本中已经引用了ns.run时使用 */
 export function getFnIsAliveViaNsIsRunning(ns) { return checkNsInstance(ns, '"getFnIsAliveViaNsIsRunning"').isRunning; }
 
 /** @param {NS} ns
- *  Use where a function is required to run a script and you have already referenced ns.ps in your script  */
+ * 当需要运行脚本的函数且您的脚本中已经引用了ns.ps时使用 */
 export function getFnIsAliveViaNsPs(ns) {
     checkNsInstance(ns, '"getFnIsAliveViaNsPs"');
     return function (pid, host) { return ns.ps(host).some(process => process.pid === pid); }
 }
 
 /**
- * Retrieve the result of an ns command by executing it in a temporary .js script, writing the result to a file, then shuting it down
- * Importing incurs 1.0 GB RAM (uses ns.run), but if you are already using ns.exec in your script for other purposes,
- * you can call getNsDataThroughFile_Custom with fnRun set to the result of `getFnRunViaNsExec(ns)` and incur no additional RAM.
- * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {string} command The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
- * @param {string?} fName (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
- * @param {any[]?} args args to be passed in as arguments to command being run as a new script.
- * @param {boolean?} verbose (default false) If set to true, pid and result of command are logged.
- * TODO: Switch to an args object, this is getting ridiculous
+ * 通过在临时.js脚本中执行ns命令来获取结果,将结果写入文件,然后关闭它
+ * 导入会产生1.0GB RAM开销(使用ns.run),但如果您的脚本已经出于其他目的使用ns.exec,
+ * 您可以用fnRun设置为getFnRunViaNsExec(ns)的结果来调用getNsDataThroughFile_Custom,不会产生额外的RAM开销。
+ * 具有在失败时重试的能力(例如由于可用RAM不足)。不建议用于性能关键代码。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {string} command 应该调用以获取所需数据的ns命令(例如 "ns.getServer('home')" )
+ * @param {string?} fName (默认 "/Temp/{command-name}.txt") 临时进程将数据写入磁盘的文件名
+ * @param {any[]?} args 作为参数传递给作为新脚本运行的命令。
+ * @param {boolean?} verbose (默认 false) 如果设置为true,将记录pid和命令结果。
  **/
 export async function getNsDataThroughFile(ns, command, fName = null, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50, silent = false) {
     checkNsInstance(ns, '"getNsDataThroughFile"');
@@ -155,8 +156,8 @@ export async function getNsDataThroughFile(ns, command, fName = null, args = [],
     return await getNsDataThroughFile_Custom(ns, ns.run, command, fName, args, verbose, maxRetries, retryDelayMs, silent);
 }
 
-/** Convert a command name like "ns.namespace.someFunction(args, args)" into
- * a default file path for running that command "/Temp/namespace-someFunction.txt" */
+/** 将像"ns.namespace.someFunction(args, args)"这样的命令名称转换为
+ * 运行该命令的默认文件路径"/Temp/namespace-someFunction.txt" */
 function getDefaultCommandFileName(command, ext = '.txt') {
     // If prefixed with "ns.", strip that out
     let fname = command;
@@ -170,16 +171,15 @@ function getDefaultCommandFileName(command, ext = '.txt') {
 }
 
 /**
- * An advanced version of getNsDataThroughFile that lets you pass your own "fnRun" implementation to reduce RAM
- * requirements (if you already reference ns.exec in your script, pass the result of `getFnRunViaNsExec(ns)`)
- * Importing incurs no RAM (now that ns.read is free) plus whatever fnRun you provide it.
- * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {function} fnRun A single-argument function used to start the new sript, e.g. `ns.run` or `(f,...args) => ns.exec(f, "home", ...args)`
- * @param {string} command The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
- * @param {string?} fName (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
- * @param {any[]?} args args to be passed in as arguments to command being run as a new script.
- * @param {boolean?} verbose (default false) If set to true, pid and result of command are logged.
+ * getNsDataThroughFile的高级版本,允许您传递自己的"fnRun"实现以减少RAM需求(如果您已经在脚本中引用了ns.exec,请传递getFnRunViaNsExec(ns)的结果)
+ * 导入不会产生RAM开销(现在ns.read是免费的),加上您提供的fnRun。
+ * 具有在失败时重试的能力(例如由于可用RAM不足)。不建议用于性能关键代码。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {function} fnRun 用于启动新脚本的单参数函数,例如`ns.run`或`(f,...args) => ns.exec(f, "home", ...args)`
+ * @param {string} command 应该调用以获取所需数据的ns命令(例如 "ns.getServer('home')" )
+ * @param {string?} fName (默认 "/Temp/{command-name}.txt") 临时进程将数据写入磁盘的文件名
+ * @param {any[]?} args 作为参数传递给作为新脚本运行的命令。
+ * @param {boolean?} verbose (默认 false) 如果设置为true,将记录pid和命令结果。
  **/
 export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = null, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50, silent = false) {
     checkNsInstance(ns, '"getNsDataThroughFile_Custom"');
@@ -233,7 +233,7 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
     return JSON.parse(fileData, jsonReviver); // Deserialize it back into an object/array and return
 }
 
-/** Allows us to serialize types not normally supported by JSON.serialize */
+/** 允许我们序列化JSON.serialize不支持的类型 */
 export function jsonReplacer(key, val) {
     if (val === Infinity)
         return { $type: 'number', $value: 'Infinity' };
@@ -250,7 +250,7 @@ export function jsonReplacer(key, val) {
     return val;
 }
 
-/** Allows us to deserialize special values created by the above jsonReplacer */
+/** 允许我们反序列化由上述jsonReplacer创建的特殊值 */
 export function jsonReviver(key, val) {
     if (val == null || typeof val !== 'object' || val.$type == null)
         return val;
@@ -265,12 +265,13 @@ export function jsonReviver(key, val) {
     return val;
 }
 
-/** Evaluate an arbitrary ns command by writing it to a new script and then running or executing it.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {string} command The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
- * @param {string?} fileName (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
- * @param {any[]?} args args to be passed in as arguments to command being run as a new script.
- * @param {boolean?} verbose (default false) If set to true, the evaluation result of the command is printed to the terminal
+/**
+ * 通过将其写入新脚本然后运行或执行它来评估任意ns命令。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {string} command 应该调用以获取所需数据的ns命令(例如 "ns.getServer('home')" )
+ * @param {string?} fileName (默认 "/Temp/{command-name}.txt") 临时进程将数据写入磁盘的文件名
+ * @param {any[]?} args 作为参数传递给作为新脚本运行的命令。
+ * @param {boolean?} verbose (默认 false) 如果设置为true,将命令的评估结果打印到终端
  */
 export async function runCommand(ns, command, fileName, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50, silent = false) {
     checkNsInstance(ns, '"runCommand"');
@@ -278,9 +279,9 @@ export async function runCommand(ns, command, fileName, args = [], verbose = fal
     return await runCommand_Custom(ns, ns.run, command, fileName, args, verbose, maxRetries, retryDelayMs, silent);
 }
 
-const _cachedExports = []; // A cached list of functions exported by helpers.js. Should be fine as long as we aren't actively editing it.
-/** @param {NS} ns The nestcript instance passed to your script's main entry point
- * @returns {string[]} The set of all function names exported by this file. */
+const _cachedExports = []; // 缓存的helpers.js导出函数列表。只要我们不主动编辑它,应该没问题。
+/** @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @returns {string[]} 此文件导出的所有函数名称的集合。 */
 function getExports(ns) {
     if (_cachedExports.length > 0) return _cachedExports;
     const scriptHelpersRows = ns.read(getFilePath('helpers.js')).split("\n");
@@ -294,13 +295,13 @@ function getExports(ns) {
 }
 
 /**
- * An advanced version of runCommand that lets you pass your own "isAlive" test to reduce RAM requirements (e.g. to avoid referencing ns.isRunning)
- * Importing incurs 0 GB RAM (assuming fnRun, fnWrite are implemented using another ns function you already reference elsewhere like ns.exec)
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {function} fnRun A single-argument function used to start the new sript, e.g. `ns.run` or `(f,...args) => ns.exec(f, "home", ...args)`
- * @param {string} command The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
- * @param {string?} fileName (default "/Temp/{commandhash}-data.txt") The name of the file to which data will be written to disk by a temporary process
- * @param {any[]?} args args to be passed in as arguments to command being run as a new script.
+ * runCommand的高级版本,允许您传递自己的"isAlive"测试以减少RAM需求(例如避免引用ns.isRunning)
+ * 导入不会产生RAM开销(假设fnRun,fnWrite是使用您在其他地方已经引用的另一个ns函数实现的,如ns.exec)
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {function} fnRun 用于启动新脚本的单参数函数,例如`ns.run`或`(f,...args) => ns.exec(f, "home", ...args)`
+ * @param {string} command 应该调用以获取所需数据的ns命令(例如 "ns.getServer('home')" )
+ * @param {string?} fileName (默认 "/Temp/{commandhash}-data.txt") 临时进程将数据写入磁盘的文件名
+ * @param {any[]?} args 作为参数传递给作为新脚本运行的命令。
  **/
 export async function runCommand_Custom(ns, fnRun, command, fileName, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50, silent = false) {
     checkNsInstance(ns, '"runCommand_Custom"');
@@ -359,23 +360,23 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, args = [],
 }
 
 /**
- * Wait for a process id to complete running
- * Importing incurs a maximum of 0.1 GB RAM (for ns.isRunning)
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {number} pid The process id to monitor
- * @param {boolean?} verbose (default false) If set to true, pid and result of command are logged. **/
+ * 等待进程ID完成运行
+ * 导入会产生最多0.1GB RAM开销(用于ns.isRunning)
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {number} pid 要监视的进程ID
+ * @param {boolean?} verbose (默认 false) 如果设置为true,将记录pid和命令结果。 **/
 export async function waitForProcessToComplete(ns, pid, verbose = false) {
     checkNsInstance(ns, '"waitForProcessToComplete"');
     if (!verbose) disableLogs(ns, ['isRunning']);
     return await waitForProcessToComplete_Custom(ns, ns.isRunning, pid, verbose);
 }
 /**
- * An advanced version of waitForProcessToComplete that lets you pass your own "isAlive" test to reduce RAM requirements (e.g. to avoid referencing ns.isRunning)
- * Importing incurs 0 GB RAM (assuming fnIsAlive is implemented using another ns function you already reference elsewhere like ns.ps)
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {(pid: number) => Promise<boolean>} fnIsAlive A single-argument function used to start the new sript, e.g. `ns.isRunning` or `pid => ns.ps("home").some(process => process.pid === pid)`
- * @param {number} pid The process id to monitor
- * @param {boolean?} verbose (default false) If set to true, pid and result of command are logged. **/
+ * waitForProcessToComplete的高级版本,允许您传递自己的"isAlive"测试以减少RAM需求(例如避免引用ns.isRunning)
+ * 导入不会产生RAM开销(假设fnIsAlive是使用您在其他地方已经引用的另一个ns函数实现的,如ns.ps)
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {(pid: number) => Promise<boolean>} fnIsAlive 用于启动新脚本的单参数函数,例如`ns.isRunning`或`pid => ns.ps("home").some(process => process.pid === pid)`
+ * @param {number} pid 要监视的进程ID
+ * @param {boolean?} verbose (默认 false) 如果设置为true,将记录pid和命令结果。 **/
 export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose = false) {
     checkNsInstance(ns, '"waitForProcessToComplete_Custom"');
     if (!verbose) disableLogs(ns, ['sleep']);
@@ -400,15 +401,15 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
     }
 }
 
-/** If the argument is an Error instance, returns it as is, otherwise, returns a new Error instance. */
+/** 如果参数是Error实例,则按原样返回,否则返回新的Error实例。 */
 function asError(error) {
     return error instanceof Error ? error :
         new Error(typeof error === 'string' ? error :
             JSON.stringify(error, jsonReplacer)); // TODO: jsonReplacer to support ScriptDeath objects and other custom Bitburner throws
 }
 
-/** Helper to retry something that failed temporarily (can happen when e.g. we temporarily don't have enough RAM to run)
- * @param {NS} ns The nestcript instance passed to your script's main entry point */
+/** 帮助重试暂时失败的操作(例如当我们暂时没有足够的RAM运行时)
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例 */
 export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, errorContext = "Success condition not met",
     maxRetries = 5, initialRetryDelayMs = 50, backoffRate = 3, verbose = false, tprintFatalErrors = true, silent = false) {
     // If any args were skipped by passing null or undefined, set them to the default
@@ -456,8 +457,8 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
     throw new Error("Unexpected return from autoRetry");
 }
 
-/** Helper for extracting the error message from an error thrown by the game.
- * @param {Error|string} err A thrown error message or object
+/** 帮助从游戏抛出的错误中提取错误信息。
+ * @param {Error|string} err 抛出的错误消息或对象
 */
 export function getErrorInfo(err) {
     if (err === undefined || err == null) return "(null error)"; // Nothing caught
@@ -490,11 +491,11 @@ export function getErrorInfo(err) {
         ' { ' + Object.keys(err).map(key => `${key}: ${err[key]}`).join(', ') + ' }';
 }
 
-/** Helper to log a message, and optionally also tprint it and toast it
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {string} message The message to display
- * @param {boolean} alsoPrintToTerminal Set to true to print not only to the current script's tail file, but to the terminal
- * @param {""|"success"|"warning"|"error"|"info"} toastStyle - If specified, your log will will also become a toast notification
+/** 帮助记录消息,并可选地将其打印到终端和显示为toast通知
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {string} message 要显示的消息
+ * @param {boolean} alsoPrintToTerminal 设置为true时,不仅打印到当前脚本的尾文件,还打印到终端
+ * @param {""|"success"|"warning"|"error"|"info"} toastStyle - 如果指定,您的日志也将成为toast通知
  * @param {int} */
 export function log(ns, message = "", alsoPrintToTerminal = false, toastStyle = "", maxToastLength = Number.MAX_SAFE_INTEGER) {
     checkNsInstance(ns, '"log"');
@@ -502,15 +503,15 @@ export function log(ns, message = "", alsoPrintToTerminal = false, toastStyle = 
     if (toastStyle) ns.toast(message.length <= maxToastLength ? message : message.substring(0, maxToastLength - 3) + "...", toastStyle);
     if (alsoPrintToTerminal) {
         ns.tprint(message);
-        // TODO: Find a way write things logged to the terminal to a "permanent" terminal log file, preferably without this becoming an async function.
-        //       Perhaps we copy logs to a port so that a separate script can optionally pop and append them to a file.
-        //ns.write("log.terminal.txt", message + '\n', 'a'); // Note: we should get away with not awaiting this promise since it's not a script file
+        // TODO: 找一种方法把打印到终端的内容永久保存到文件,最好不要让这个函数变成异步的。
+        //       也许我们可以把日志复制到端口,让其他脚本来负责保存它们。
+        //ns.write("log.terminal.txt", message + '\n', 'a'); // 注意:由于不是脚本文件,我们可以不用等待这个 promise
     }
     return message;
 }
 
-/** Helper to get a list of all hostnames on the network
- * @param {NS} ns The nestcript instance passed to your script's main entry point
+/** 获取网络上所有主机名的帮助函数
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
  * @returns {string[]} **/
 export function scanAllServers(ns) {
     checkNsInstance(ns, '"scanAllServers"');
@@ -527,21 +528,21 @@ export function scanAllServers(ns) {
     return discoveredHosts; // The list of scanned hosts should now be the set of all hosts in the game!
 }
 
-/** Get a dictionary of active source files, taking into account the current active bitNode as well (optionally disabled).
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {bool} includeLevelsFromCurrentBitnode Set to true to use the current bitNode number to infer the effective source code level (for purposes of determining what features are unlocked)
- * @param {bool} silent Set to true if you want to minimize logging errors (e.g. due to not owning singularity or having insufficient RAM)
- * @returns {Promise<{[k: number]: number}>} A dictionary keyed by source file number, where the value is the level (between 1 and 3 for all but BN12) **/
+/** 获取活动源文件的字典,同时考虑当前活动的bitNode(可选禁用)。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {bool} includeLevelsFromCurrentBitnode 设置为true时,使用当前bitNode编号推断有效的源代码级别(用于确定解锁哪些功能)
+ * @param {bool} silent 设置为true时,如果您希望最小化日志记录错误(例如由于没有单数或RAM不足)
+ * @returns {Promise<{[k: number]: number}>} 以源文件编号为键的字典,值为级别(除BN12外,介于1和3之间) **/
 export async function getActiveSourceFiles(ns, includeLevelsFromCurrentBitnode = true, silent = true) {
     return await getActiveSourceFiles_Custom(ns, getNsDataThroughFile, includeLevelsFromCurrentBitnode, silent);
 }
 
-/** getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number, silent?: bool) => Promise<any>} fnGetNsDataThroughFile getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage
- * @param {bool} includeLevelsFromCurrentBitnode Set to true to use the current bitNode number to infer the effective source code level (for purposes of determining what features are unlocked)
- * @param {bool} silent Set to true if you want to minimize logging errors (e.g. due to not owning singularity or having insufficient RAM)
- * @returns {Promise<{[k: number]: number}>} A dictionary keyed by source file number, where the value is the level (between 1 and 3 for all but BN12) **/
+/** getActiveSourceFiles Helper,允许用户传入他们选择的getNsDataThroughFile实现以最小化RAM使用
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number, silent?: bool) => Promise<any>} fnGetNsDataThroughFile getActiveSourceFiles Helper,允许用户传入他们选择的getNsDataThroughFile实现以最小化RAM使用
+ * @param {bool} includeLevelsFromCurrentBitnode 设置为true时,使用当前bitNode编号推断有效的源代码级别(用于确定解锁哪些功能)
+ * @param {bool} silent 设置为true时,如果您希望最小化日志记录错误(例如由于没有单数或RAM不足)
+ * @returns {Promise<{[k: number]: number}>} 以源文件编号为键的字典,值为级别(除BN12外,介于1和3之间) **/
 export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, includeLevelsFromCurrentBitnode = true, silent = true) {
     checkNsInstance(ns, '"getActiveSourceFiles"');
     // Find out what source files the user has unlocked
@@ -579,17 +580,17 @@ export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, in
     return dictSourceFiles;
 }
 
-/** Return bitNode multiplers, or a best guess based on hard-coded values if they cannot currently be retrieved (no SF5, or insufficient RAM)
- *  @param {NS} ns The nestcript instance passed to your script's main entry point
- * @returns {Promise<BitNodeMultipliers>} the current bitNode multipliers, or a best guess if we do not currently have access. */
+/** 返回bitNode乘数,或基于硬编码值的最佳猜测,如果当前无法检索(没有SF5或RAM不足)
+ *  @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @returns {Promise<BitNodeMultipliers>} 当前bitNode乘数,或我们无法访问时的最佳猜测。 */
 export async function tryGetBitNodeMultipliers(ns) {
     return await tryGetBitNodeMultipliers_Custom(ns, getNsDataThroughFile);
 }
 
-/** tryGetBitNodeMultipliers Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number, silent?: bool) => Promise<any>} fnGetNsDataThroughFile getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage
- * @returns {Promise<BitNodeMultipliers>} the current bitNode multipliers, or a best guess if we do not currently have access. */
+/** tryGetBitNodeMultipliers Helper,允许用户传入他们选择的getNsDataThroughFile实现以最小化RAM使用
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number, silent?: bool) => Promise<any>} fnGetNsDataThroughFile getActiveSourceFiles Helper,允许用户传入他们选择的getNsDataThroughFile实现以最小化RAM使用
+ * @returns {Promise<BitNodeMultipliers>} 当前bitNode乘数,或我们无法访问时的最佳猜测。 */
 export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile) {
     checkNsInstance(ns, '"tryGetBitNodeMultipliers"');
     let canGetBitNodeMultipliers = false;
@@ -604,13 +605,13 @@ export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile
     return await getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile);
 }
 
-/** Cheeky hard-coded values stolen from https://github.com/bitburner-official/bitburner-src/blob/dev/src/BitNode/BitNode.tsx#L456
- *  so that we essentially can provide bitNode multipliers even without SF-5 or sufficient RAM to request them.
- *  We still prefer to use the API though, this is just a a fallback, but it may become stale over time.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number) => Promise<any>} fnGetNsDataThroughFile getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage
- * @param {number} bnOverride The bitnode for which to retrieve multipliers. Defaults to the current BN if null.
- * @returns {Promise<BitNodeMultipliers>} a mocked BitNodeMultipliers instance with hard-coded values. */
+/** 狡猾的硬编码值,从https://github.com/bitburner-official/bitburner-src/blob/dev/src/BitNode/BitNode.tsx#L456窃取
+ * 这样我们实际上可以提供bitNode乘数,即使没有SF-5或足够的RAM请求它们。
+ * 我们仍然更喜欢使用API,这只是一个后备,但它可能会随着时间的推移而变得陈旧。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number) => Promise<any>} fnGetNsDataThroughFile getActiveSourceFiles Helper,允许用户传入他们选择的getNsDataThroughFile实现以最小化RAM使用
+ * @param {number} bnOverride 要检索乘数的bitnode。默认为当前BN,如果为null。
+ * @returns {Promise<BitNodeMultipliers>} 具有硬编码值的模拟BitNodeMultipliers实例。 */
 export async function getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile, bnOverride = null) {
     let bn = bnOverride ?? 1;
     if (!bnOverride) {
@@ -673,13 +674,13 @@ export async function getHardCodedBitNodeMultipliers(ns, fnGetNsDataThroughFile,
     }).map(([mult, values]) => [mult, values[bn - 1]]));
 }
 
-/** Returns the number of instances of the current script running on the specified host.
- *  Uses ram-dodging (which costs 1GB for ns.run if you aren't already using it.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {string} onHost - The host to search for the script on
- * @param {boolean} warn - Whether to automatically log a warning when there are more than other running instances
- * @param {tailOtherInstances} warn - Whether to open the tail window of other running instances so that they can be easily killed
- * @returns {Promise<number>} The number of other instance of this script running on this host. */
+/** 返回当前脚本在指定主机上运行的实例数。
+ *  使用ram-dodging(如果您没有已经使用它,这会消耗1GB的ns.run)。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {string} onHost - 要搜索脚本的主机
+ * @param {boolean} warn - 是否在有多个运行实例时自动记录警告
+ * @param {tailOtherInstances} warn - 是否打开其他运行实例的尾窗口,以便可以轻松杀死它们
+ * @returns {Promise<number>} 此脚本在此主机上运行的其他实例数。 */
 export async function instanceCount(ns, onHost = "home", warn = true, tailOtherInstances = true) {
     checkNsInstance(ns, '"alreadyRunning"');
     const scriptName = ns.getScriptName();
@@ -707,18 +708,18 @@ export async function instanceCount(ns, onHost = "home", warn = true, tailOtherI
     return otherInstancePids.length;
 }
 
-/** Helper function to get all stock symbols, or null if you do not have TIX api access.
- *  @param {NS} ns The nestcript instance passed to your script's main entry point
- * @returns {Promise<string[]>} array of stock symbols */
+/** 获取所有股票符号的帮助函数,如果您没有TIX API访问权限,则返回null。
+ *  @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @returns {Promise<string[]>} 股票符号数组 */
 export async function getStockSymbols(ns) {
     return await getNsDataThroughFile(ns,
         `(() => { try { return ns.stock.getSymbols(); } catch { return null; } })()`,
         '/Temp/stock-symbols.txt');
 }
 
-/** Helper function to get the total value of stocks using as little RAM as possible.
- *  @param {NS} ns The nestcript instance passed to your script's main entry point
- * @returns {Promise<number>} The current total dollar value of all owned stocks */
+/** 获取股票总价值的帮助函数,使用尽可能少的RAM。
+ *  @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @returns {Promise<number>} 当前所有股票的总美元价值 */
 export async function getStocksValue(ns) {
     let stockSymbols = await getStockSymbols(ns);
     if (stockSymbols == null) return 0; // No TIX API Access
@@ -737,18 +738,18 @@ export async function getStocksValue(ns) {
             - 100000 * (Math.sign(stk.pos[0]) + Math.sign(stk.pos[2])), 0);
 }
 
-/** Returns a helpful error message if we forgot to pass the ns instance to a function
- *  @param {NS} ns The nestcript instance passed to your script's main entry point */
+/** 返回一个有用的错误消息,如果我们忘记将ns实例传递给函数
+ *  @param {NS} ns 传递给脚本主入口点的nestcript实例 */
 export function checkNsInstance(ns, fnName = "this function") {
     if (ns === undefined || !ns.print) throw new Error(`The first argument to function ${fnName} should be a 'ns' instance.`);
     return ns;
 }
 
-/** A helper to parse the command line arguments with a bunch of extra features, such as
- * - Loading a persistent defaults override from a local config file named after the script.
- * - Rendering "--help" output without all scripts having to explicitly specify it
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {[string, string | number | boolean | string[]][]} argsSchema - Specification of possible command line args. **/
+/** 一个帮助解析命令行参数的助手,具有许多额外功能,例如
+ * - 从以脚本命名的本地配置文件加载持久的默认覆盖。
+ * - 渲染"--help"输出,而无需所有脚本显式指定它
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {[string, string | number | boolean | string[]][]} argsSchema - 可能的命令行参数的规范。 **/
 export function getConfiguration(ns, argsSchema) {
     checkNsInstance(ns, '"getConfig"');
     const scriptName = ns.getScriptName();
@@ -827,10 +828,9 @@ export function getConfiguration(ns, argsSchema) {
     }
 }
 
-/** In order to pass in args to pass along to the startup/completion script, they may have to be quoted, when given as
- * parameters to this script, but those quotes will have to be stripped when passing these along to a subsequent script as raw strings.
- * @param {string[]} args - The the array-argument passed to the script.
- * @returns {string[]} The the array-argument unescaped (or deserialized if a single argument starting with '[' was supplied]). */
+/** 为了传递参数以传递给启动/完成脚本,它们可能需要加引号,当作为参数传递给此脚本时,但在将这些参数作为原始字符串传递给后续脚本时,必须去掉这些引号。
+ * @param {string[]} args - 传递给脚本的数组参数。
+ * @returns {string[]} 去掉转义字符的数组参数(或如果提供了以'['开头的单个参数,则反序列化)。 */
 export function unEscapeArrayArgs(args) {
     // For convenience, also support args as a single stringified array
     if (args.length == 1 && args[0].startsWith("[")) return JSON.parse(args[0]);
@@ -840,10 +840,10 @@ export function unEscapeArrayArgs(args) {
 }
 
 /**
- * Custom tail function which also applies default resizes and tail window placement.
- * This algorithm is not perfect but for the most part should not generate overlaps of the window's title bar.
- * @param {NS} ns The nestcript instance passed to your script's main entry point
- * @param {number|undefined} processId The id of the process to tail, or null to use the current process id
+ * 自定义tail函数,还应用默认的调整大小和tail窗口位置。
+ * 该算法并不完美,但大多数情况下不应生成窗口标题栏的重叠。
+ * @param {NS} ns 传递给脚本主入口点的nestcript实例
+ * @param {number|undefined} processId 要tail的进程ID,或null以使用当前进程ID
  */
 export function tail(ns, processId = undefined) {
     checkNsInstance(ns, '"tail"');
