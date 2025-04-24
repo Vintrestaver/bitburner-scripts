@@ -140,16 +140,27 @@ export async function main(ns) {
                 this.ns.getServerUsedRam(this.config.HOME_SERVER) -
                 this.config.RESERVE_RAM);
 
-            // 获取三种脚本的实际RAM使用量
-            const hackRam = this.getScriptRam(this.config.SCRIPTS.HACK);
-            const growRam = this.getScriptRam(this.config.SCRIPTS.GROW);
-            const weakenRam = this.getScriptRam(this.config.SCRIPTS.WEAKEN);
+            // 获取脚本RAM使用量并计算权重
+            const scriptRams = {
+                hack: this.getScriptRam(this.config.SCRIPTS.HACK),
+                grow: this.getScriptRam(this.config.SCRIPTS.GROW),
+                weaken: this.getScriptRam(this.config.SCRIPTS.WEAKEN)
+            };
 
-            // 计算最小公倍数RAM，确保线程分配更精确
-            const lcmRam = Math.max(hackRam, growRam, weakenRam);
+            // 动态规划模型 - 根据实时需求调整权重
+            const currentStatus = this.getServerStatus(server, this.ns.getServerMinSecurityLevel(server));
+            const weightHack = currentStatus.moneyRatio > 0.8 ? 1.2 : 0.8;
+            const weightGrow = currentStatus.moneyRatio < 0.5 ? 1.5 : 1.0;
+            const weightWeaken = currentStatus.securityDiff > 3 ? 1.3 : 0.7;
 
-            // 基于最耗RAM的脚本计算最大线程数
-            return Math.max(1, Math.floor(availableRam / lcmRam));
+            // 加权平均RAM需求
+            const weightedRam = (
+                scriptRams.hack * weightHack +
+                scriptRams.grow * weightGrow +
+                scriptRams.weaken * weightWeaken
+            ) / (weightHack + weightGrow + weightWeaken);
+
+            return Math.max(1, Math.floor(availableRam / weightedRam));
         }
 
         /**
@@ -161,8 +172,8 @@ export async function main(ns) {
          */
         calculateQValues(server, moneyRatio, securityDiff) {
             // 基础Q值 - 考虑服务器难度系数
-            const serverDifficulty = this.ns.getServerRequiredHackingLevel(server) / 
-                                   this.ns.getHackingLevel();
+            const serverDifficulty = this.ns.getServerRequiredHackingLevel(server) /
+                this.ns.getHackingLevel();
             const difficultyFactor = Math.min(1, 1 / (1 + serverDifficulty));
 
             let qValues = {
@@ -191,7 +202,7 @@ export async function main(ns) {
          * @param {number} totalThreads 总线程数
          * @param {number} weakenWeight 削弱权重
          * @param {number} growWeight 增长权重 
-         * @param {number} hackWeight 入侵权重
+         * @param {number} hackWeight 入侵重
          * @returns {Object} 各动作线程数
          */
         applyThreadAllocation(totalThreads, weakenWeight, growWeight, hackWeight) {
@@ -253,11 +264,18 @@ export async function main(ns) {
             const ramPercent = this.ns.formatPercent(ramUsed / ramMax, 1);
             const serverStats = await this.getServerStats();
 
+            // 性能指标
+            const totalRuntime = Math.max(1, (now - this.stats.startTime) / 1000);
+            const opsPerSecond = (this.stats.totalHacks + this.stats.totalGrows + this.stats.totalWeakens) / totalRuntime;
+            const threadUtilization = (this.stats.totalHacks + this.stats.totalGrows + this.stats.totalWeakens) /
+                (this.stats.totalHacks === 0 ? 1 : (this.stats.totalHacks / this.config.HACK_RATIO));
+
             // 清屏并显示标题
             this.ns.clearLog();
-            this.ns.print(`${this.config.COLORS.DASHBOARD.BORDER}${"=".repeat(60)}`);
-            this.ns.print(`${this.config.COLORS.DASHBOARD.TITLE}🛠️ AutoHack 仪表盘 | 运行时间: ${runtime}`);
+            this.ns.print(`${this.config.COLORS.DASHBOARD.BORDER}${'='.repeat(70)}`);
+            this.ns.print(`${this.config.COLORS.DASHBOARD.TITLE}🛠️ AutoHack 仪表盘 v2.1 | 运行时间: ${runtime}`);
             this.ns.print(`${this.config.COLORS.DASHBOARD.STATS}📊 资源: ${this.ns.formatRam(ramUsed)}/${this.ns.formatRam(ramMax)} (${ramPercent})`);
+            this.ns.print(`${this.config.COLORS.DASHBOARD.STATS}📈 效率: ${this.ns.formatNumber(opsPerSecond, 1)} 操作/秒 | 线程利用率: ${this.ns.formatPercent(threadUtilization, 1)}`);
             this.ns.print(`${this.config.COLORS.DASHBOARD.STATS}💰 总收入: ${this.ns.formatNumber(this.stats.totalMoney).padEnd(8)}`);
             this.ns.print(`${this.config.COLORS.DASHBOARD.STATS}⚡ 操作统计: 入侵 ${this.ns.formatNumber(this.stats.totalHacks).padEnd(8)} | 增长 ${this.ns.formatNumber(this.stats.totalGrows).padEnd(8)} | 削弱 ${this.ns.formatNumber(this.stats.totalWeakens).padEnd(8)}`);
             this.ns.print(`${this.config.COLORS.DASHBOARD.BORDER}${"=".repeat(60)}`);
@@ -348,20 +366,23 @@ export async function main(ns) {
             let retries = 0;
             while (retries < this.config.MAX_RETRIES) {
                 try {
-                    const servers = new Set([this.config.HOME_SERVER]);
-                    const toScan = [this.config.HOME_SERVER];
+                    const visited = new Set([this.config.HOME_SERVER]);
+                    const queue = [this.config.HOME_SERVER];
+                    const pathMap = { [this.config.HOME_SERVER]: [] };
 
-                    while (toScan.length > 0) {
-                        const hostname = toScan.pop();
-                        for (const server of this.ns.scan(hostname)) {
-                            if (!servers.has(server)) {
-                                servers.add(server);
-                                toScan.push(server);
-                            }
+                    while (queue.length > 0) {
+                        const current = queue.pop();
+                        const neighbors = this.ns.scan(current).filter(n => !visited.has(n));
+
+                        for (const neighbor of neighbors) {
+                            pathMap[neighbor] = [...pathMap[current], neighbor];
+                            visited.add(neighbor);
+                            queue.push(neighbor);
                         }
                     }
 
-                    this.serverCache = Array.from(servers);
+                    this.serverCache = Array.from(visited);
+                    this.serverPaths = pathMap;
                     this.lastScanTime = now;
                     return this.serverCache;
                 } catch (error) {
@@ -544,10 +565,10 @@ export async function main(ns) {
         async attackTarget(target) {
             const MAX_ATTACK_TIME = 30000; // 30秒超时
             const startTime = Date.now();
-            
+
             try {
                 const server = target.hostname;
-                
+
                 // 检查是否超时
                 if (Date.now() - startTime > MAX_ATTACK_TIME) {
                     this.log("WARN", `攻击 ${server} 超时，跳过`);
