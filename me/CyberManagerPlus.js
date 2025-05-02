@@ -12,47 +12,75 @@ export async function main(ns) {
         WARNING: 3
     };
 
-    // ====================== 系统配置 ======================
-    const CONFIG = {
-        RESERVE_FILE: "reserve.txt",
-        MAX_SERVERS: 25,
-        SERVER_PREFIX: "daemon",
-        UPDATE_INTERVAL: 1000,
-        HASH_THRESHOLD: 0.95,
-        DEBUG_MODE: true,
-        UI_WIDTH: 50,
-        MIN_RAM: 8,
-        HACKNET_PRIORITY: ["RAM", "Core", "Level", "Cache"],
-        VALID_HACKNET_TYPES: ["RAM", "Core", "Level", "Cache"],
-
-        SCRIPTS: {
-            autohack: {
-                path: 'me/autohack.js',
-                minHackingLevel: 8000,
-                ram: ns.getScriptRam('me/autohack.js', 'home')
-            },
-            stock: {
-                path: 'me/stock.js',
-                ram: ns.getScriptRam('me/stock.js', 'home')
-            },
-            gang: {
-                path: 'me/gang.js',
-                ram: ns.getScriptRam('me/gang.js', 'home'),
-                karmaThreshold: -54000
-            }
-        },
-        HASH_VALUE: 1e6 / 4,
-        ERROR: {
-            MAX_RETRIES: 3,
-            COOLDOWN: 5000
+    // ====================== 配置管理器 ======================
+    class ConfigManager {
+        constructor(ns) {
+            this.ns = ns;
+            this.config = {
+                RESERVE_FILE: "reserve.txt",
+                MAX_SERVERS: 25,
+                SERVER_PREFIX: "daemon",
+                UPDATE_INTERVAL: 1000,
+                HASH_THRESHOLD: 0.95,
+                DEBUG_MODE: true,
+                UI_WIDTH: 50,
+                MIN_RAM: 8,
+                HACKNET_PRIORITY: ["RAM", "Core", "Level", "Cache"],
+                VALID_HACKNET_TYPES: ["RAM", "Core", "Level", "Cache"],
+                HASH_VALUE: 1e6 / 4,
+                ERROR: {
+                    MAX_RETRIES: 3,
+                    COOLDOWN: 5000
+                }
+            };
+            
+            this.scriptsConfig = {
+                autohack: this._initScriptConfig('me/autohack.js', {
+                    minHackingLevel: 8000
+                }),
+                stock: this._initScriptConfig('me/stock.js'),
+                gang: this._initScriptConfig('me/gang.js', {
+                    karmaThreshold: -54000
+                })
+            };
         }
-    };
+
+        _initScriptConfig(path, extra = {}) {
+            return {
+                path,
+                ram: this.ns.getScriptRam(path, 'home'),
+                ...extra
+            };
+        }
+
+        getConfig() {
+            return this.config;
+        }
+
+        getScriptsConfig() {
+            return this.scriptsConfig;
+        }
+
+        updateConfig(newConfig) {
+            this.config = {...this.config, ...newConfig};
+        }
+
+        updateScriptConfig(scriptName, newConfig) {
+            if (this.scriptsConfig[scriptName]) {
+                this.scriptsConfig[scriptName] = {
+                    ...this.scriptsConfig[scriptName],
+                    ...newConfig
+                };
+            }
+        }
+    }
 
     // ====================== 系统管理器 ======================
     class SystemManager {
-        constructor() {
+        constructor(ns) {
             this.ns = ns;
-            this.reserve = Number(this.ns.read(CONFIG.RESERVE_FILE)) || 0;
+            this.configManager = new ConfigManager(ns);
+            this.reserve = Number(this.ns.read(this.configManager.getConfig().RESERVE_FILE)) || 0;
             this.loopCount = 0;
             this.startTime = Date.now();
 
@@ -95,8 +123,9 @@ export async function main(ns) {
             };
 
             // 验证配置
-            CONFIG.HACKNET_PRIORITY = CONFIG.HACKNET_PRIORITY.filter(type =>
-                CONFIG.VALID_HACKNET_TYPES.includes(type)
+            const config = this.configManager.getConfig();
+            config.HACKNET_PRIORITY = config.HACKNET_PRIORITY.filter(type =>
+                config.VALID_HACKNET_TYPES.includes(type)
             );
         }
 
@@ -159,7 +188,7 @@ export async function main(ns) {
                 };
 
                 for (let i = 0; i < nodeCount; i++) {
-                    for (const type of CONFIG.HACKNET_PRIORITY) {
+                    for (const type of this.configManager.getConfig().HACKNET_PRIORITY) {
                         const handler = upgradeHandlers[type];
                         if (!handler) continue;
 
@@ -186,12 +215,12 @@ export async function main(ns) {
                 const bestRam = this.getBestRamSize();
 
                 // 购买新服务器
-                if (servers.length < CONFIG.MAX_SERVERS &&
-                    bestRam >= CONFIG.MIN_RAM &&
+                if (servers.length < this.configManager.getConfig().MAX_SERVERS &&
+                    bestRam >= this.configManager.getConfig().MIN_RAM &&
                     this.canAfford(this.ns.getPurchasedServerCost(bestRam))) {
 
                     const hostname = this.ns.purchaseServer(
-                        CONFIG.SERVER_PREFIX,
+                        this.configManager.getConfig().SERVER_PREFIX,
                         bestRam
                     );
 
@@ -209,7 +238,7 @@ export async function main(ns) {
                         this.ns.killall(hostname);
                         if (this.ns.deleteServer(hostname)) {
                             const newHost = this.ns.purchaseServer(
-                                CONFIG.SERVER_PREFIX,
+                                this.configManager.getConfig().SERVER_PREFIX,
                                 bestRam
                             );
 
@@ -231,10 +260,10 @@ export async function main(ns) {
                 this.state.player.money = this.ns.getPlayer().money;
 
                 // 管理自动黑客脚本
-                const shouldRunAutohack = this.state.player.hacking < CONFIG.SCRIPTS.autohack.minHackingLevel;
+                const shouldRunAutohack = this.state.player.hacking < this.configManager.getScriptsConfig().autohack.minHackingLevel;
                 if (shouldRunAutohack !== this.state.scripts.autohack.running) {
                     if (shouldRunAutohack) {
-                        const pid = this.ns.run(CONFIG.SCRIPTS.autohack.path);
+                        const pid = this.ns.run(this.configManager.getScriptsConfig().autohack.path);
                         if (pid) {
                             this.state.scripts.autohack = {
                                 running: true,
@@ -250,7 +279,7 @@ export async function main(ns) {
 
                 // 管理股票脚本
                 if (this.state.stock.has4SData && !this.state.scripts.stock.running) {
-                    const pid = this.ns.run(CONFIG.SCRIPTS.stock.path);
+                    const pid = this.ns.run(this.configManager.getScriptsConfig().stock.path);
                     if (pid) {
                         this.state.scripts.stock = {
                             running: true,
@@ -261,10 +290,10 @@ export async function main(ns) {
                 }
 
                 // 管理帮派脚本
-                const shouldRunGang = this.ns.getPlayer().karma < CONFIG.SCRIPTS.gang.karmaThreshold;
+                const shouldRunGang = this.ns.getPlayer().karma < this.configManager.getScriptsConfig().gang.karmaThreshold;
                 if (shouldRunGang !== this.state.scripts.gang.running) {
                     if (shouldRunGang) {
-                        const pid = this.ns.run(CONFIG.SCRIPTS.gang.path);
+                        const pid = this.ns.run(this.configManager.getScriptsConfig().gang.path);
                         if (pid) {
                             this.state.scripts.gang = {
                                 running: true,
@@ -286,7 +315,7 @@ export async function main(ns) {
         get money() { return this.ns.getPlayer().money; }
 
         getBestRamSize() {
-            let ram = CONFIG.MIN_RAM;
+            let ram = this.configManager.getConfig().MIN_RAM;
             while (ram <= 2 ** 20 && this.canAfford(this.ns.getPurchasedServerCost(ram * 2), 10)) {
                 ram *= 2;
             }
@@ -336,7 +365,7 @@ export async function main(ns) {
                 // 系统状态头
                 const statusColor = !this.state.system.healthy ? "\x1b[38;5;196m" :
                     this.state.system.degraded ? "\x1b[38;5;220m" : "\x1b[38;5;46m";
-                ui.push(`\x1b[38;5;21m${'◼'.repeat(CONFIG.UI_WIDTH - 13)}\x1b[0m`);
+                ui.push(`\x1b[38;5;21m${'◼'.repeat(this.configManager.getConfig().UI_WIDTH - 13)}\x1b[0m`);
                 ui.push(`${statusColor}▶ CyberManager \x1b[38;5;33mv1.2\x1b[0m | ` +
                     `循环: \x1b[1m${ns.formatNumber(this.loopCount, 0)}\x1b[0m | 运行: ${this.format.time((Date.now() - this.startTime) / 1000)}`);
 
@@ -359,7 +388,7 @@ export async function main(ns) {
                 const servers = this.ns.getPurchasedServers();
                 const ramLevel = Math.log2(this.getBestRamSize());
                 ui.push([
-                    `\x1b[38;5;208m● 服务器\x1b[0m 数量:${servers.length}/${CONFIG.MAX_SERVERS}`,
+                    `\x1b[38;5;208m● 服务器\x1b[0m 数量:${servers.length}/${this.configManager.getConfig().MAX_SERVERS}`,
                     `RAM等级:\x1b[38;5;${ramLevel > 10 ? 46 : ramLevel > 5 ? 226 : 196}m${ramLevel}\x1b[0m`,
                     `最大:${this.format.ram(this.getBestRamSize())}`
                 ].join(' | '));
@@ -385,7 +414,7 @@ export async function main(ns) {
 
                 // 底部状态栏
                 const health = this.state.system.healthy ? 46 : this.state.system.degraded ? 226 : 196;
-                ui.push(`\x1b[48;5;17m\x1b[38;5;${health}m${'◼'.repeat(CONFIG.UI_WIDTH - 13)}\x1b[0m`);
+                ui.push(`\x1b[48;5;17m\x1b[38;5;${health}m${'◼'.repeat(this.configManager.getConfig().UI_WIDTH - 13)}\x1b[0m`);
 
                 this.ns.print(ui.join('\n'));
             } catch (e) {
@@ -400,9 +429,10 @@ export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
     ns.atExit(() => {
-        ns.scriptKill(CONFIG.SCRIPTS.autohack.path, ns.getHostname());
-        ns.scriptKill(CONFIG.SCRIPTS.stock.path, ns.getHostname());
-        ns.scriptKill(CONFIG.SCRIPTS.gang.path, ns.getHostname());
+        const scriptsConfig = manager.configManager.getScriptsConfig();
+        ns.scriptKill(scriptsConfig.autohack.path, ns.getHostname());
+        ns.scriptKill(scriptsConfig.stock.path, ns.getHostname());
+        ns.scriptKill(scriptsConfig.gang.path, ns.getHostname());
     });
 
     while (true) {
@@ -412,7 +442,7 @@ export async function main(ns) {
         manager.loopCount++;
 
         // 更新保留金额
-        manager.reserve = Number(ns.read(CONFIG.RESERVE_FILE)) || 0;
+        manager.reserve = Number(ns.read(manager.configManager.getConfig().RESERVE_FILE)) || 0;
 
         // 更新收入统计
         const now = Date.now();
@@ -429,6 +459,6 @@ export async function main(ns) {
         await manager.manageScripts();
         manager.renderUI();
 
-        await ns.sleep(CONFIG.UPDATE_INTERVAL);
+        await ns.sleep(manager.configManager.getConfig().UPDATE_INTERVAL);
     }
 }
