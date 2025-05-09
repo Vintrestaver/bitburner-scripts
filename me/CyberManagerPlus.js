@@ -35,7 +35,7 @@ export async function main(ns) {
             };
             
             this.scriptsConfig = {
-                autohack: this._initScriptConfig('me/autohack.js', {
+                autohack: this._initScriptConfig('me/autohack2.js', {
                     minHackingLevel: 8000
                 }),
                 stock: this._initScriptConfig('me/stock.js'),
