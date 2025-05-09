@@ -373,22 +373,29 @@ export async function main(ns) {
 
     function fmtPosition(pos, index) {
         const rsiColor = pos.rsi < 30 ? COLORS.rsiLow :
-            pos.rsi > 70 ? COLORS.rsiHigh : COLORS.rsiMid;
-        const volColor = pos.volatility > CONFIG.VOLATILITY_FILTER ?
-            COLORS.warning : COLORS.reset;
-        const trendIcon = pos.trend === 'bull' ?
-            `${COLORS.bullish}▲${COLORS.reset}` :
-            `${COLORS.bearish}▼${COLORS.reset}`;
+            pos.rsi > 70 ? COLORS.rsiHigh : COLORS.rsiMid; // 根据RSI值返回颜色
+        const volColor = pos.volatility > CONFIG.VOLATILITY_FILTER
+            ? COLORS.warning : COLORS.reset; // 根据波动率返回颜色
+        const trendIcon = pos.trend === 'bull'
+            ? `${COLORS.bullish}▲${COLORS.reset}`
+            : `${COLORS.bearish}▼${COLORS.reset}`; // 根据趋势返回图标
+
+        const longRatio = pos.long[0] / pos.maxShares; // 长仓比例
+        const shortRatio = pos.short[0] / pos.maxShares; // 短仓比例
+
+        const longDisplay = pos.long[0] > 0 ?
+            `${COLORS.info}📈:${fmtNum(pos.long[0])} ${getBar(longRatio, COLORS.bullish)}` : ''; // 长仓显示
+        const shortDisplay = pos.short[0] > 0 ?
+            `${COLORS.highlight}📉:${fmtNum(pos.short[0])} ${getBar(shortRatio, COLORS.bearish)}` : ''; // 短仓显示
 
         return [
-            `${index.toString().padStart(2)}`,
-            `${getTrendColor(pos.symbol)}${pos.symbol.padEnd(5)}${COLORS.reset}`,
-            `${trendIcon}`,
-            `${rsiColor}RSI:${pos.rsi.toFixed(0).padStart(2)}${COLORS.reset}`,
-            `${volColor}VOL:${(pos.volatility * 100).toFixed(1)}%${COLORS.reset}`,
-            `${getBar(pos.forecast, COLORS.info)}`,
-            `P/L: ${pos.totalProfit >= 0 ? COLORS.profit : COLORS.loss}${fmtMoney(pos.totalProfit)}${COLORS.reset}`
-        ].join(' | ');
+            ` ${index.toString().padStart(2)} ${pos.sym.padEnd(5)} ${trendIcon}`, // 序号、股票代码、趋势图标
+            `${rsiColor}RSI:${pos.rsi.toFixed(0).padEnd(3)}${COLORS.reset}`, // RSI值
+            `${volColor}VOL:${fmtPct(pos.volatility)}${COLORS.reset}`, // 波动率
+            `FOR:${fmtPct(pos.forecast)}`, // 预测值
+            `${longDisplay}${shortDisplay}`, // 仓位显示
+            `${pos.totalProfit >= 0 ? COLORS.profit : COLORS.loss}${fmtMoney(pos.totalProfit)}` // 总利润
+        ].join(' │ '); // 返回格式化的持仓信息
     }
 
     function logTransaction(icon, sym, shares, price, profit = 0) {
@@ -636,22 +643,36 @@ export async function main(ns) {
 
     // ===================== 性能指标 =====================
     function updateMetrics(processingTime) {
-        METRICS.processingTime = processingTime;
+        const closedTrades = STATE.transactions.filter(t => t.profit !== 0); // 获取已平仓交易
+        STATE.metrics.winRate = closedTrades.length > 0 ?
+            closedTrades.filter(t => t.profit > 0).length / closedTrades.length : 0; // 计算赢率
 
-        const currentWorth = getNetWorth();
-        if (currentWorth > STATE.metrics.peakNetWorth) {
-            STATE.metrics.peakNetWorth = currentWorth;
-        } else {
-            const drawdown = (STATE.metrics.peakNetWorth - currentWorth) / STATE.metrics.peakNetWorth;
-            STATE.metrics.maxDrawdown = Math.max(STATE.metrics.maxDrawdown, drawdown);
-        }
+        const currentNet = getNetWorth(); // 获取总资产净值
+        STATE.metrics.peakNetWorth = Math.max(STATE.metrics.peakNetWorth, currentNet); // 更新净资产峰值
+        const drawdown = (STATE.metrics.peakNetWorth - currentNet) / STATE.metrics.peakNetWorth; // 计算最大回撤
+        STATE.metrics.maxDrawdown = Math.max(STATE.metrics.maxDrawdown, drawdown); // 更新最大回撤
 
-        // 计算胜率
-        const trades = STATE.transactions.slice(-100);
-        if (trades.length > 0) {
-            const winningTrades = trades.filter(t => t.profit > 0).length;
-            STATE.metrics.winRate = winningTrades / trades.length;
+        STATE.metrics.avgProcessingTime =
+            (STATE.metrics.avgProcessingTime || 0) * 0.9 +
+            processingTime * 0.1; // 更新平均处理时间
+
+        const now = Date.now();
+        STATE.transactions.forEach(t => {
+            if (!t.entryTime && t.shares > 0) {
+                t.entryTime = now; // 记录进入时间
+            } else if (t.entryTime && t.shares === 0) {
+                const duration = now - t.entryTime; // 计算持仓时间
+                STATE.metrics.avgHoldingTime =
+                    (STATE.metrics.avgHoldingTime || 0) * 0.9 +
+                    duration * 0.1; // 更新平均持仓时间
+                delete t.entryTime; // 删除进入时间
+            }
+        });
+
+        if (!STATE.metrics.startTime) {
+            STATE.metrics.startTime = Date.now(); // 记录启动时间
         }
+        STATE.metrics.uptime = Date.now() - STATE.metrics.startTime; // 计算运行时间
     }
 
     // ===================== 配置管理 =====================
@@ -682,26 +703,16 @@ export async function main(ns) {
 
     function cleanupCache() {
         const now = Date.now();
-        // 每5分钟清理一次缓存
-        if (now - METRICS.lastCleanup > 300000) {
-            CACHE.prices.clear();
-            CACHE.analysis.clear();
-            ErrorHandler.retryCount.clear();
+        if (now - METRICS.lastCleanup < 3600000) return; // 如果未超过一小时则跳过
 
-            // 清理旧的交易记录，只保留最近100条
-            if (STATE.transactions.length > 100) {
-                STATE.transactions = STATE.transactions.slice(-100);
+        for (const key of CACHE.prices.keys()) {
+            if (!STATE.symbols.includes(key)) {
+                CACHE.prices.delete(key); // 删除无效缓存
+                CACHE.analysis.delete(key); // 删除无效分析结果
             }
-
-            // 清理超过24小时的历史数据
-            for (const [sym, data] of STATE.history) {
-                if (now - data.lastUpdate > 86400000) {
-                    STATE.history.delete(sym);
-                }
-            }
-
-            METRICS.lastCleanup = now;
         }
+
+        METRICS.lastCleanup = now; // 更新最后清理时间
     }
 
     function optimizeMemory() {
@@ -742,74 +753,20 @@ export async function main(ns) {
     }
 
     function updateMarketState() {
-        const allPrices = Array.from(CACHE.prices.values());
-        const returns = allPrices.map((price, i) =>
-            i > 0 ? (price - allPrices[i - 1]) / allPrices[i - 1] : 0);
+        const now = Date.now();
+        if (now - MARKET_STATE.lastUpdate < 60000) return;
 
-        // 计算市场波动率
-        MARKET_STATE.volatility = calculateVolatility(returns);
+        const volatility = getMarketVolatility();
+        const momentum = getAverageMomentum();
+        const correlation = calculateMarketCorrelation();
 
-        // 计算市场动量
-        const momentum = returns.reduce((sum, ret) => sum + ret, 0) / returns.length;
+        MARKET_STATE.volatility = volatility;
         MARKET_STATE.momentum = momentum;
+        MARKET_STATE.correlation = correlation;
+        MARKET_STATE.regime = determineMarketRegime(volatility, momentum, correlation);
+        MARKET_STATE.lastUpdate = now;
 
-        // 计算市场相关性
-        MARKET_STATE.correlation = calculateMarketCorrelation();
-
-        // 判断市场状态
-        if (MARKET_STATE.volatility > 0.02) {
-            MARKET_STATE.regime = 'volatile';
-        } else if (Math.abs(MARKET_STATE.momentum) > 0.005) {
-            MARKET_STATE.regime = 'trending';
-        } else {
-            MARKET_STATE.regime = 'normal';
-        }
-
-        MARKET_STATE.lastUpdate = Date.now();
-    }
-
-    function calculateVolatility(returns) {
-        const mean = returns.reduce((sum, ret) => sum + ret, 0) / returns.length;
-        const squaredDiffs = returns.map(ret => Math.pow(ret - mean, 2));
-        return Math.sqrt(squaredDiffs.reduce((sum, diff) => sum + diff, 0) / returns.length);
-    }
-
-    function calculateMarketCorrelation() {
-        const symbols = STATE.symbols;
-        let totalCorr = 0;
-        let count = 0;
-
-        for (let i = 0; i < symbols.length; i++) {
-            for (let j = i + 1; j < symbols.length; j++) {
-                const corrCoef = calculateCorrelation(
-                    STATE.history.get(symbols[i]).prices,
-                    STATE.history.get(symbols[j]).prices
-                );
-                if (!isNaN(corrCoef)) {
-                    totalCorr += Math.abs(corrCoef);
-                    count++;
-                }
-            }
-        }
-
-        return count > 0 ? totalCorr / count : 0;
-    }
-
-    function calculateCorrelation(pricesA, pricesB) {
-        const n = Math.min(pricesA.length, pricesB.length);
-        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
-
-        for (let i = 0; i < n; i++) {
-            sumX += pricesA[i];
-            sumY += pricesB[i];
-            sumXY += pricesA[i] * pricesB[i];
-            sumX2 += pricesA[i] * pricesA[i];
-            sumY2 += pricesB[i] * pricesB[i];
-        }
-
-        const numerator = n * sumXY - sumX * sumY;
-        const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-
-        return denominator === 0 ? 0 : numerator / denominator;
+        updateRiskParameters();
+        optimizeMemory();
     }
 }
