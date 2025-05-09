@@ -17,7 +17,7 @@ export async function main(ns) {
             // 检查4S数据接口
             if (ns.stock.has4SDataTIXAPI()) {
                 if (!ns.isRunning("me/stock.js")) {
-                    ns.run("me/stock.js", 1, "--daemon");
+                    ns.run("me/stock.js");
                     ns.tprint("✅ 股票交易系统已启动");
                 }
             } 
