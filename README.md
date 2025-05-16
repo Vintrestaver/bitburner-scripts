@@ -1,146 +1,146 @@
-# Insight's Scripts
-Welcome to Insight's Bitburner scripts - one of the Bitburner scripts of all time. Hosted on my personal github because all the best hackers dox themselves.
+# Insight的脚本
+欢迎使用Insight的Bitburner脚本 - 有史以来最好的Bitburner脚本之一。托管在我的个人GitHub上，因为所有最好的黑客都会自曝身份。
 
-# Downloading the whole repository
+# 下载整个仓库
 
-If you manually `nano git-pull.js` from the terminal and copy the [contents of that script](https://raw.githubusercontent.com/alainbryden/bitburner-scripts/main/git-pull.js), you should be able to run it once and download the rest of the files I use. Early-game, many will be useless because they are only enabled by late-game features, but they shouldn't give you too many problems just being there.
+如果你从终端手动`nano git-pull.js`并复制[该脚本的内容](https://raw.githubusercontent.com/alainbryden/bitburner-scripts/main/git-pull.js)，你应该能够运行它一次并下载我使用的其余文件。在游戏早期，许多脚本将无用，因为它们仅在游戏后期功能启用时才有用，但它们只是存在的话应该不会给你带来太多问题。
 
-# Running scripts
+# 运行脚本
 
-If you `run autopilot.js` from the terminal, it will start several other scripts.
+如果你从终端运行`run autopilot.js`，它将启动几个其他脚本。
 
-You can think of this as the "master orchestrator" script. It will kick off `daemon.js` (your primary hacking script), which in turn kicks off several other helper-scripts. It will monitor your progress throughout the game, and take special actions when it can. I don't want to spoil too much for those new to the game, but it's worth mentioning that `SF4` is not required, but is highly-recommended to get the full benefit of this script.
+你可以将其视为“主协调器”脚本。它将启动`daemon.js`（你的主要黑客脚本），而`daemon.js`又会启动几个辅助脚本。它将监控你在游戏中的进度，并在可能时采取特殊行动。我不想为游戏新手剧透太多，但值得一提的是，`SF4`不是必需的，但强烈建议你启用它以获得该脚本的全部好处。
 
-Most scripts can also be run on their own, but are primarily designed to be orchestrated by `autopilot.js` or `daemon.js`.
+大多数脚本也可以单独运行，但主要是设计为由`autopilot.js`或`daemon.js`协调运行。
 
-## Manually run scripts
+## 手动运行脚本
 
-Some scripts are meant to be manually run as needed. Most scripts take arguments to tweak or customize their behaviour based on your preferences or special circumstance. More on this [below](#customizing-script-behaviour-basic).
-Run scripts with the `--help` flag to get a list of their arguments, default values, and a brief description of each:
+有些脚本需要根据需要手动运行。大多数脚本接受参数，以便根据你的偏好或特殊情况调整或自定义其行为。更多信息请参见[下文](#customizing-script-behaviour-basic)。
+使用`--help`标志运行脚本以获取其参数列表、默认值以及每个参数的简要说明：
 ![image](https://user-images.githubusercontent.com/2285037/166085058-952b0805-cf4e-4548-8829-1e1ebeb5428b.png)
-You will also see an error-version of this dialog if you make a mistake in how you run the script.
+如果你在运行脚本时出错，你也会看到此对话框的错误版本。
 
-If you have personal preference and wish to "permanently" change the configuration of one of my scripts, you can do so without sacrificing your ability to "git-pull.js" the latest - simply [create a custom `config.txt`](https://github.com/alainbryden/bitburner-scripts/edit/main/README.md#config-files) file for the script.
+如果你有个人偏好并希望“永久”更改我的脚本配置，你可以在不牺牲“git-pull.js”获取最新版本的能力的情况下进行 - 只需[创建一个自定义的`config.txt`](https://github.com/alainbryden/bitburner-scripts/edit/main/README.md#config-files)文件。
 
-_Note:_ `autopilot.js` (and in turn, `daemon.js`) will already run many instances of scripts with default arguments. If you wish to run them with special arguments, you must either kill the default version or simply run scripts with your desired arguments **before** starting daemon.js. Daemon.js will only start scripts that are not already running (regardless of the arguments of the currently running instance.)
+_注意：_ `autopilot.js`（以及`daemon.js`）将使用默认参数运行许多脚本实例。如果你希望使用特殊参数运行它们，你必须要么终止默认版本，要么在启动`daemon.js`之前使用你想要的参数运行脚本。`Daemon.js`只会启动尚未运行的脚本（无论当前运行实例的参数如何）。
 
-## Brief description of Scripts
+## 脚本简要描述
 
-Here are scripts that you may want to manually run, roughly in the order in which you'll want to experiment with them:
+以下是你可能希望手动运行的脚本，大致按你希望尝试它们的顺序排列：
 
-- `git-pull.js` - Hopefully you used this to download the scripts. Run it whenever you want to update.
-- `scan.js` - Shows you the entire server network and important information about each server. A nice replacement for the built-in `scan` and/or `scan-analyze` commands, with support for unlimited depth.
-- `autopilot.js` - Plays the game for you (more or less).
-- `daemon.js` - Automates hacking and infrastructure, and kicking off various scripts to take advantage of other mechanics in the game as you unlock them.
-- `casino.js` - The first time you run this may come as a surprise, it will play blackjack and reload the game if it loses (automated save-scumming). Once you win 10b, you cannot enter the casino any more. Great way to boost your progress once you make the initial 200k needed to travel to Aevum and use the casino. For best performance, run `kill-all-scripts.js` before you run this, since other running scripts slow down the game's load time.
-- `reserve.js` - A simple way to reserve money across all scripts, in case you wanted to be certain to save up for something. e.g. `run reserve.js 200k` will reserve the $200,000 needed to get `casino.js` going.
-- `kill-all-scripts.js` - Kills all scripts running on home and remote servers, and also removes files that were copied to remote servers.
-- `faction-manager.js` - (Requires SF4) Run this periodically to find out how many augmentations you can currently afford. There are many command line options available to tweak the sort of augmentations you wish to prioritize. Run with `--purchase` to pull the trigger if you're ready to ascend.
-- `work-for-factions.js` - (Requires SF4) Daemon.js will start a version of this to make sure your "focus" work goes to good use, but often you'll want to run with your own arguments to specify what kind of work you want to be doing, depending on your goals for the current BitNode.
-- `crime.js` - (Requires SF4) While `work-for-factions.js` will do crime as-needed, you can use this instead to do nothing but crime.
-- `ascend.js` - (Requires SF4) A nearly-fully-automated way to ascend. Takes care of all the things you may or may not have known you wanted to do before installing augmentations and resetting.
-- `spend-hacknet-hashes.js` - (Requires SF9) Many scripts will launch this automatically, but you can start your own instances to focus on purchasing the hash upgrades you want in your current situation. Many aliases for this exist below.
-- `farm-intelligence.js` - (Requires SF4, SF5) Contains a script that can execute one or more of the best known methods to farm intelligence experience.
-  - Note that the current best method (soft reset loop) is most effective if you delete all scripts except this one (and helpers.js which it relies on) before running. You can do this quickly by modifying cleanup.js to run on all files instead of just /Temp/. You then would have to restore scripts by nano'ing git-pull as when you started out.
-- `cleanup.js` - Use this to clear out your temp folder (which contains hundreds of miniature scripts generated by the main scripts). Useful to reduce your save file size before exporting.
-- `grep.js` - Use this to search one or all files for certain text. Handy if you are trying to figure out e.g. what script spend hashes, or care about the TIX api.
-- `run-command.js` - Useful for testing a bit of code from the terminal without having to create a new script. Creating the alias `alias do="run run-command.js"` makes this extra useful. e.g. `do ns.getPlayer()` will print all the player's info to the terminal. `do ns.getServer('joesguns')` will print all info about that server to the terminal.
+- `git-pull.js` - 希望你使用它来下载脚本。每当你想更新时运行它。
+- `scan.js` - 显示整个服务器网络以及每个服务器的重要信息。这是内置`scan`和/或`scan-analyze`命令的一个很好的替代品，支持无限深度。
+- `autopilot.js` - 为你玩游戏（或多或少）。
+- `daemon.js` - 自动化黑客和基础设施，并启动各种脚本以利用游戏中解锁的其他机制。
+- `casino.js` - 第一次运行这个脚本可能会让你感到惊讶，它会玩二十一点，如果输了则重新加载游戏（自动保存作弊）。一旦你赢了100亿，你就不能再进入赌场了。一旦你赚到前往Aevum并使用赌场所需的20万，这是提升进度的好方法。为了获得最佳性能，在运行此脚本之前运行`kill-all-scripts.js`，因为其他正在运行的脚本会减慢游戏的加载时间。
+- `reserve.js` - 一种简单的方法来在所有脚本中保留资金，以防你确定要存钱购买某些东西。例如，`run reserve.js 200k`将保留启动`casino.js`所需的20万美元。
+- `kill-all-scripts.js` - 终止在家庭和远程服务器上运行的所有脚本，并删除复制到远程服务器的文件。
+- `faction-manager.js` - （需要SF4）定期运行此脚本以了解你当前可以购买多少增强。有许多命令行选项可用于调整你希望优先考虑的增强类型。如果你准备好提升，请使用`--purchase`运行以触发。
+- `work-for-factions.js` - （需要SF4）`Daemon.js`将启动此脚本的一个版本，以确保你的“专注”工作得到充分利用，但通常你会希望使用自己的参数运行，以指定你希望进行的工作类型，具体取决于你当前BitNode的目标。
+- `crime.js` - （需要SF4）虽然`work-for-factions.js`会根据需要进行犯罪，但你可以使用此脚本专门进行犯罪。
+- `ascend.js` - （需要SF4）一种几乎完全自动化的提升方式。负责处理你可能知道或不知道在安装增强和重置之前想要做的所有事情。
+- `spend-hacknet-hashes.js` - （需要SF9）许多脚本会自动启动此脚本，但你可以启动自己的实例以专注于购买你当前情况下想要的哈希升级。下面有许多此脚本的别名。
+- `farm-intelligence.js` - （需要SF4, SF5）包含一个脚本，可以执行一个或多个已知的最佳方法来获取智力经验。
+  - 请注意，当前最佳方法（软重置循环）在删除除该脚本（以及它依赖的`helpers.js`）之外的所有脚本后运行效果最佳。你可以通过修改`cleanup.js`以在所有文件上运行而不是仅在`/Temp/`上运行来快速完成此操作。然后你将不得不像刚开始时那样通过nano`git-pull`来恢复脚本。
+- `cleanup.js` - 使用此脚本清除你的临时文件夹（其中包含由主脚本生成的数百个微型脚本）。在导出之前减少保存文件大小时很有用。
+- `grep.js` - 使用此脚本在一个或所有文件中搜索某些文本。如果你试图找出例如哪个脚本花费哈希，或者关心TIX API，这将非常方便。
+- `run-command.js` - 用于从终端测试一些代码而无需创建新脚本。创建别名`alias do="run run-command.js"`使其更加有用。例如，`do ns.getPlayer()`会将玩家的所有信息打印到终端。`do ns.getServer('joesguns')`会将该服务器的所有信息打印到终端。
 
-If you want more information about any script, try reading the source. I do my best to document things clearly. If it's not clear, feel free to raise an issue.
+如果你想了解有关任何脚本的更多信息，请尝试阅读源代码。我尽力清晰地记录内容。如果不清楚，请随时提出问题。
 
-## Customizing Script Behaviour (Basic)
-Most scripts are designed to be configured via command line arguments. (Such as using `run host-manager.js --min-ram-exponent 8` to ensure no servers are purchased with less than 2^8 GB of RAM)
+## 自定义脚本行为（基础）
+大多数脚本设计为通过命令行参数进行配置。（例如使用`run host-manager.js --min-ram-exponent 8`以确保不会购买少于2^8 GB RAM的服务器）
 
-Default behaviours are to try to "balance" priorities and give most things an equal share of budget / RAM, but this isn't always ideal, especially in bitnodes that cripple one aspect of the game or the other. You can `nano` to view the script and see what the command line options are, or type e.g. `daemon.js --` (dash dash) and hit `<tab>` to get a pop-up auto-completion list. (Make sure your mouse cursor is over the terminal for the auto-complete to appear.)
+默认行为是尝试“平衡”优先级，并给予大多数事物平等的预算/RAM份额，但这并不总是理想的，尤其是在那些削弱游戏某一方面或其他方面的bitnodes中。你可以`nano`查看脚本以查看命令行选项是什么，或者输入例如`daemon.js --`（双破折号）并点击`<tab>`以获取弹出式自动完成列表。（确保你的鼠标光标位于终端上以显示自动完成。）
 
-Near the top of the initializer for `daemon.js`, there are a list of external scripts that are spawned initially, and periodically. Some of these can be commented out if you would rather not have that script run automatically (for example `work-for-factions` if you would like to manually choose how to spend your "focus" times.) Once you've downloaded this file, you should customize it with the default options you like, and comment out the external scripts you don't want to run.
+在`daemon.js`的初始化器顶部，有一个最初启动并定期运行的外部脚本列表。如果你不希望该脚本自动运行，可以注释掉其中一些脚本（例如`work-for-factions`，如果你希望手动选择如何花费你的“专注”时间）。一旦你下载了此文件，你应该使用你喜欢的默认选项进行自定义，并注释掉你不想运行的外部脚本。
 
-## Aliases
+## 别名
 
-You may find it useful to set up one or more aliases with the default options you like rather than editing the file itself. (Pro-tip, aliases support tab-auto-completion). I personally use the following aliases:
+你可能会发现设置一个或多个具有你喜欢的默认选项的别名比编辑文件本身更有用。（专业提示，别名支持标签自动完成）。我个人使用以下别名：
 
 - `alias git-pull="run git-pull.js"`
-  - Makes auto-updating just a little easier.
+  - 使自动更新更容易一些。
 - `alias start="run autopilot.js"`
 - `alias stop="home; kill autopilot.js ; kill daemon.js ; run kill-all-scripts.js"`
-  - Quick way to start/stop the system. I personally now use `auto` instead of `start` for this alias (auto => autopilot.js).
+  - 快速启动/停止系统的方法。我个人现在使用`auto`而不是`start`作为此别名（auto => autopilot.js）。
 - `alias sscan="home; run scan.js"`
-  - Makes it a little quicker to run this custom-scan routine, which shows the entire network, stats about servers, and provides handy links for jumping to servers or backdooring them.
+  - 使运行此自定义扫描例程更快一些，它显示整个网络、服务器统计信息，并提供方便的链接以跳转到服务器或后门它们。
 - `alias do="run run-command.js"`
-  - This lets you run ns commands from the terminal, such as `do ns.getPlayer()`, `do Object.keys(ns)` or `do ns.getServerMoneyAvailable('n00dles')`
+  - 这使你可以从终端运行ns命令，例如`do ns.getPlayer()`、`do Object.keys(ns)`或`do ns.getServerMoneyAvailable('n00dles')`
 - `alias reserve="run reserve.js"`
-  - Doesn't save many keystrokes, but worth highlighting this script. You can run e.g. `reserve 100m` to globally reserve this much money. All scripts with an auto-spend component should respect this amount and leave it unspent. This is useful if e.g. you're saving up to buy something (SQLInject.exe, a big server, the next home RAM upgrade), saving money to spend at the casino, etc...
+  - 不会节省太多击键，但值得强调此脚本。你可以运行例如`reserve 100m`以全局保留此金额。所有具有自动支出组件的脚本都应尊重此金额并保持未支出状态。这在例如你正在存钱购买某些东西（SQLInject.exe、一台大服务器、下一个家庭RAM升级）、存钱在赌场花费等情况下很有用。
 - `alias liquidate="home; run stockmaster.js --liquidate; run spend-hacknet-hashes.js --liquidate;"`
-  - Quickly sell all your stocks and hacknet hashes for money so that you can spend it (useful before resetting)
+  - 快速出售你所有的股票和黑客网络哈希以获取资金，以便你可以花费它（在重置之前很有用）
 - `alias facman="run faction-manager.js"`
-  - Quickly see what augmentations you can afford to purchase. Then use `facman --purchase` to pull the trigger.
+  - 快速查看你可以购买哪些增强。然后使用`facman --purchase`来触发。
 - `alias buy-daemons="run host-manager.js --run-continuously --reserve-percent 0 --min-ram-exponent 19 --utilization-trigger 0 --tail"`
-  - This is an example of how to use host-manager to buy servers for you. In this example, we are willing to spend all our current money  (--reserve-percent 0) if it means buying a server with 2^19 GB ram or more (--min-ram-exponent), even if our scripts aren't using any RAM on the network (--utilization-trigger 0), 
+  - 这是如何使用host-manager为你购买服务器的示例。在此示例中，我们愿意花费我们当前的所有资金（--reserve-percent 0）以购买具有2^19 GB RAM或更多的服务器（--min-ram-exponent），即使我们的脚本没有在网络中使用任何RAM（--utilization-trigger 0），
 - `alias spend-on-ram="run Tasks/ram-manager.js --reserve 0 --budget 1 --tail"`
 - `alias spend-on-gangs="run gangs.js --reserve 0 --augmentations-budget 1 --equipment-budget 1 --tail"`
 - `alias spend-on-sleeves="run sleeve.js --aug-budget 1 --min-aug-batch 1 --buy-cooldown 0 --reserve 0 --tail"`
-  - Useful to run one or more of these (in your own priority order) after you've spent all you can on augmentations, before resetting.
+  - 在重置之前，在你已经花费了所有可以花费的增强之后，运行这些脚本中的一个或多个（按你自己的优先级顺序）很有用。
 - `alias spend-on-hacknet="run hacknet-upgrade-manager.js --interval 10 --max-payoff-time 8888h --continuous --tail"`
-  - Essentially spends a lot of money upgrading the hacknet. If it doesn't spend enough, increase the --max-payoff-time even more.
+  - 基本上花费大量资金升级黑客网络。如果它花费不够，请进一步增加--max-payoff-time。
 - `alias hashes-to-bladeburner="run spend-hacknet-hashes.js --spend-on Exchange_for_Bladeburner_Rank --spend-on Exchange_for_Bladeburner_SP --liquidate --tail"`
 - `alias hashes-to-corp-money="run spend-hacknet-hashes.js --spend-on Sell_for_Corporation_Funds --liquidate --tail"`
 - `alias hashes-to-corp-research="run spend-hacknet-hashes.js --spend-on Exchange_for_Corporation_Research --liquidate --tail"`
 - `alias hashes-to-corp="run spend-hacknet-hashes.js --spend-on Sell_for_Corporation_Funds --spend-on Exchange_for_Corporation_Research --liquidate --tail"`
 - `alias hashes-to-hack-server="run spend-hacknet-hashes.js --liquidate --spend-on Increase_Maximum_Money --spend-on Reduce_Minimum_Security --spend-on-server"`
-  - Useful to set up hashes to automatically get spent on one or more things as you can afford them. Omit --liquidate if you want to save up hashes to spend yourself, and only want to spend them when you reach capacity to avoid wasting them.
+  - 设置哈希以在你负担得起时自动花费在一个或多个事情上很有用。如果你想要自己保存哈希并仅在达到容量时花费它们以避免浪费，请省略--liquidate。
 - `alias stock="run stockmaster.js --fracH 0.001 --fracB 0.1 --show-pre-4s-forecast --noisy --tail --reserve 100000000"`
-  - Useful in e.g. BN8 to invest all cash in the stock market, and closely track progress. _(Also reserves 100m to play blackjack at the casino so you can build up cash quickly. Pro-tip: Save if you win, and just reload (or soft-reset if you hate save-scumming) when you lose it all to get your money back.)_
+  - 在例如BN8中，将所有现金投资于股票市场并密切跟踪进度很有用。（还保留1亿以在赌场玩二十一点，以便你可以快速积累现金。专业提示：如果你赢了就保存，如果你输光了就重新加载（或者如果你讨厌保存作弊就软重置）以拿回你的钱。）
 - `alias crime="run crime.js --tail --fast-crimes-only"`
-  - Start an auto-crime loop. (Requires SF4 a.k.a. Singularity access, like so many of my scripts.)
+  - 启动自动犯罪循环。（需要SF4，即Singularity访问权限，就像我的许多脚本一样。）
 - `alias work="run work-for-factions.js --fast-crimes-only"`
-  - Auto-work for factions. Will also do crime loops as deemed necessary. (Note, daemon will start this automatically as well)
+  - 自动为派系工作。也会根据需要执行犯罪循环。（注意，daemon也会自动启动此脚本）
 - `alias invites="run work-for-factions.js --fast-crimes-only --get-invited-to-every-faction --prioritize-invites --no-coding-contracts"`
-  - Tries to join as many factions as possible, regardless of whether you have un-purchased augmentations from them.
+  - 尝试加入尽可能多的派系，无论你是否从他们那里购买了未购买的增强。
 - `alias xp="run daemon.js -vx --tail --no-share"`
-  - Runs daemon in a way that focuses on earning hack XP income as quickly as possible. Only practical when you have a lot of home-ram.
+  - 以专注于尽可能快地赚取黑客XP收入的方式运行daemon。只有在你拥有大量家庭RAM时才实用。
 - `alias start-tight="run daemon.js --looping-mode --recovery-thread-padding 30 --cycle-timing-delay 2000 --queue-delay 10 --stock-manipulation-focus --tail --silent-misfires --initial-max-targets 64"`
-  - Let this be a hint as to how customizable some of these scripts are (without editing the source code). The above alias is powerful when you are end-of-bn and your hacking skill is very high (8000+), so hack/grow/weaken times are very fast (milliseconds). You can greatly increase productivity and reduce lag by switching to this `--looping-mode` which creates long-lived hack/grow/weaken scripts that run in a loop. This, in addition to the tighter cycle-timing makes them more vulnerable to misfiring (completing out-of-order), but adding recovery thread padding (a multiple on the number of grow/weaken threads to use) can quickly recover from misfires. Note that if you don't yet have enough home-ram to support such a high recovery-thread multiple, you can start lower (5 or 10) then buy more home ram and work your way up.
+  - 让这成为一些脚本可定制性的提示（无需编辑源代码）。当你处于bn末期且你的黑客技能非常高（8000+）时，上述别名非常强大，因此黑客/增长/削弱时间非常快（毫秒）。通过切换到这种`--looping-mode`，你可以大大提高生产力并减少延迟，它创建长期运行的黑客/增长/削弱脚本，这些脚本在循环中运行。此外，更紧密的循环时间使它们更容易发生失火（顺序完成），但添加恢复线程填充（使用增长/削弱线程数的倍数）可以快速从失火中恢复。请注意，如果你还没有足够的家庭RAM来支持如此高的恢复线程倍数，你可以从较低的值（5或10）开始，然后购买更多的家庭RAM并逐步提高。
 - `alias ascend="run ascend.js --install-augmentations"`
-  - A good way to finish your node. I personally prioritize augmentations when resetting, because I have all SF bonuses unlocked, but until you have SF11.3 for aug cost reduction, you may want to use the `--prioritize-home-ram` flag which prioritizes upgrading home RAM as much as possible before buying as many augmentations as possible.
+  - 完成你的节点的好方法。我个人在重置时优先考虑增强，因为我解锁了所有SF奖励，但在你拥有SF11.3以降低增强成本之前，你可能希望使用`--prioritize-home-ram`标志，该标志在购买尽可能多的增强之前优先升级家庭RAM。
 
-## Config Files
+## 配置文件
 
-Persistent Custom Configurations (script.js.config.txt files) can be specified to override the default args specified by the "args schema" in each script.
+持久自定义配置（script.js.config.txt文件）可以指定以覆盖每个脚本中“args schema”指定的默认参数。
 
-The order in which argument values are determined are:
-1. Arguments provided at the command line (or in the alias) take priority
-2. If no override is provided at the command line, any value in the config file is used.
-3. If no config file value is present, the default in the source (argsSchema) is used.
-   - Note that some defaults are set to `null` in the args schema to be overridden with more complex defaulting behaviour elsewhere in the script.
+确定参数值的顺序为：
+1. 命令行（或别名）中提供的参数优先
+2. 如果命令行中没有提供覆盖，则使用配置文件中的任何值。
+3. 如果配置文件中没有值，则使用源代码中的默认值（argsSchema）。
+   - 请注意，args schema中的某些默认值设置为`null`，以便在脚本的其他地方使用更复杂的默认行为进行覆盖。
 
-### Format Specifications
-The file should have the name `some-script-name.js.config.txt` (i.e. append `.config.txt` to the name of the script you are configuring)
+### 格式规范
+文件应命名为`some-script-name.js.config.txt`（即在你要配置的脚本名称后附加`.config.txt`）
 
-Your config file should either of the following two formats
-1. A dictionary e.g.: `{ "string-opt": "value", "num-opt": 123, "array-opt": ["one", "two"] }`
-2. An array of dict entries (2-element arrays) e.g.: `[ ["string-opt", "value"], ["num-opt", 123], ["array-opt", ["one", "two"]] ]` +
+你的配置文件应具有以下两种格式之一
+1. 字典格式，例如：`{ "string-opt": "value", "num-opt": 123, "array-opt": ["one", "two"] }`
+2. 字典条目数组（2元素数组）格式，例如：`[ ["string-opt", "value"], ["num-opt", 123], ["array-opt", ["one", "two"]] ]` +
 
-You are welcome to use line breaks and spacing to make things more human readable, so long as it is able to be parsed by JSON.parse (when in doubt, built it in code and generate it with JSON.stringify).
+你可以使用换行符和空格使内容更易于人类阅读，只要它能够被JSON.parse解析（如有疑问，请在代码中构建它并使用JSON.stringify生成）。
 
-## Customizing Script Code (Advanced)
+## 自定义脚本代码（高级）
 
-I encourage you to make a fork and customize scripts to your own needs / liking. Please don't make a PR back to me unless you truly think it's something all would benefit from. If you fork the repository, you can update the `git-pull.js` source to include your github account as the default, or set an alias that specifies this via command-line (e.g. `alias git-pull="run git-pull.js --github mygitusername --repository bitburner-scripts`). This way you can auto-update from your fork and only merge my latest changes when you're ready.
+我鼓励你创建一个分支并根据自己的需求/喜好自定义脚本。除非你真正认为这是所有人都能受益的东西，否则请不要向我提交PR。如果你分叉了仓库，你可以更新`git-pull.js`源代码以将你的GitHub帐户设置为默认值，或者通过命令行指定此别名（例如`alias git-pull="run git-pull.js --github mygitusername --repository bitburner-scripts`）。这样你可以从你的分叉自动更新，并仅在准备好时合并我的最新更改。
 
 
-# Disclaimer
+# 免责声明
 
-This is my own repository of scripts for playing Bitburner.
-I often go to some lengths to make them generic and customizable, but am by no means providing these scripts as a "service" to the Bitburner community.
-It's meant as an easy way for me to share code with friends, and track changes and bugs in my scripts.
+这是我自己的Bitburner脚本仓库。
+我经常不遗余力地使它们通用且可定制，但绝不是将这些脚本作为对Bitburner社区的“服务”提供。
+它是我与朋友分享代码并跟踪我的脚本中的更改和错误的简便方式。
 
-- If you wish to use my scripts or copy from them, feel free!
-- If you think you found a bug in them and want to let me know, awesome!
-- Please don't be insulted if you make a feature request, bug report, or pull request that I decline to act on.
-While I do like my work to be helpful to others and re-used, I am only willing to put so much effort into customizing it to others' specific needs or whims.
-You should fork the code, and start tweaking it the way you want it to behave. That's more in the spirit of the game!
+- 如果你希望使用我的脚本或从中复制，请随意！
+- 如果你认为你在其中发现了一个错误并想让我知道，太棒了！
+- 如果你提出了功能请求、错误报告或拉取请求，而我拒绝采取行动，请不要感到被冒犯。
+虽然我喜欢我的工作对他人有帮助并被重用，但我只愿意付出这么多努力来根据他人的特定需求或突发奇想进行定制。
+你应该分叉代码，并开始按照你希望的方式调整它。这更符合游戏的精神！
 
-Hit up the Bitburner Discord with any questions:
-- Invite to Bitburner Disccord: https://discord.com/invite/TFc3hKD
-- Link to the channel for these scripts: [Bitburner#alains-scripts](https://discord.com/channels/415207508303544321/935667531111342200)
+如有任何问题，请访问Bitburner Discord：
+- Bitburner Discord邀请：https://discord.com/invite/TFc3hKD
+- 这些脚本的频道链接：[Bitburner#alains-scripts](https://discord.com/channels/415207508303544321/935667531111342200)
 
-Many helpful folks in there are familiar with my scripts or ones similar to them and can address your questions and concerns far quicker than I can.
+那里有许多熟悉我的脚本或类似脚本的有帮助的人，他们可以比我能更快地解决你的问题和疑虑。
