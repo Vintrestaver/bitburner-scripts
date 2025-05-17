@@ -10,27 +10,54 @@ export async function main(ns) {
     const THREAD_LIMIT = 10000;
     const CACHE_TTL = 5000; // 5秒缓存
 
-    // 智能缓存类
-    class ScriptCache {
+    // 增强型缓存类
+    class EnhancedScriptCache {
         constructor(ttl = 5000) {
             this.ttl = ttl;
-            this.cache = { timestamp: 0, data: null };
+            this.cache = { 
+                timestamp: 0, 
+                data: null,
+                size: 0
+            };
+            this.hitCount = 0;
+            this.missCount = 0;
         }
 
         get(ns, forceUpdate = false) {
             const now = Date.now();
             if (forceUpdate || now - this.cache.timestamp > this.ttl || !this.cache.data) {
+                const startTime = Date.now();
+                const files = ns.ls('home');
                 this.cache = {
                     timestamp: now,
-                    data: ns.ls('home')
+                    data: files,
+                    size: files.length
                 };
+                this.missCount++;
+                if (DEBUG_MODE) {
+                    ns.tprint(`[CACHE] Cache miss | Fetch time: ${Date.now() - startTime}ms | Files: ${files.length}`);
+                }
+            } else {
+                this.hitCount++;
+                if (DEBUG_MODE) {
+                    ns.tprint(`[CACHE] Cache hit | Hits: ${this.hitCount} | Misses: ${this.missCount}`);
+                }
             }
             return this.cache.data;
+        }
+
+        getCacheStats() {
+            return {
+                hitCount: this.hitCount,
+                missCount: this.missCount,
+                lastUpdate: this.cache.timestamp,
+                fileCount: this.cache.size
+            };
         }
     }
 
     // 全局缓存实例
-    const scriptCache = new ScriptCache(CACHE_TTL);
+    const scriptCache = new EnhancedScriptCache(CACHE_TTL);
 
     // 获取缓存的文件列表（使用新的缓存类）
     function getCachedFiles(ns) {
@@ -47,10 +74,22 @@ export async function main(ns) {
         });
     }
 
-    // 格式化确认消息
+    // 增强型确认消息格式化
     function formatConfirmation(message, items, maxPreview = 5) {
-        const preview = items.slice(0, maxPreview).join('\n• ');
-        return `${message}（共 ${items.length} 项）\n• ${preview}${items.length > maxPreview ? '\n...及其他文件' : ''}`;
+        const total = items.length;
+        const preview = items.slice(0, maxPreview).map((item, index) => {
+            const num = index + 1;
+            const icon = num <= 3 ? '🔸' : '•';
+            return `${icon} ${item}`;
+        }).join('\n');
+        
+        const moreInfo = total > maxPreview ? 
+            `\n...及其他 ${total - maxPreview} 个文件` : '';
+            
+        const sizeInfo = total > 10 ? 
+            `\n⚠️ 注意：操作将影响 ${total} 个文件，请谨慎操作！` : '';
+            
+        return `📝 ${message}（共 ${total} 项）\n${preview}${moreInfo}${sizeInfo}`;
     }
 
     // ========================
@@ -89,22 +128,44 @@ export async function main(ns) {
     // 删除文件功能
     // ========================
 
-    // 修改后的获取目录函数
+    // 优化后的目录处理函数
     function getScriptDirectories(ns) {
+        // 使用局部缓存变量
+        let cachedDirs = null;
+        if (cachedDirs) {
+            return cachedDirs;
+        }
+
         const dirSet = new Set(['/']);
         const files = scriptCache.get(ns);
 
-        // 使用更高效的路径处理
-        files.forEach(fullPath => {
-            const normalized = normalizePath(fullPath);
-            let currentPath = '/';
-            normalized.split('/').filter(Boolean).forEach(part => {
-                currentPath += part + '/';
-                dirSet.add(currentPath);
-            });
-        });
+        // 优化路径处理逻辑
+        for (const fullPath of files) {
+            try {
+                const normalized = normalizePath(fullPath);
+                if (!normalized.startsWith('/')) {
+                    continue; // 跳过无效路径
+                }
 
-        return Array.from(dirSet).sort();
+                // 分解路径并构建目录树
+                const parts = normalized.split('/').filter(Boolean);
+                let currentPath = '/';
+                for (const part of parts.slice(0, -1)) { // 忽略文件名部分
+                    currentPath += part + '/';
+                    dirSet.add(currentPath);
+                }
+            } catch (error) {
+                if (DEBUG_MODE) {
+                    ns.tprint(`[WARN] 路径处理错误: ${fullPath} - ${error}`);
+                }
+            }
+        }
+
+        // 缓存结果
+        cachedDirs = Array.from(dirSet).sort((a, b) => 
+            a.localeCompare(b, undefined, { numeric: true })
+        );
+        return cachedDirs;
     }
 
     // 新增：统一确认对话框函数
@@ -181,19 +242,28 @@ export async function main(ns) {
         }
 
         let success = 0, failures = 0;
-        for (const file of files) {
-            if (ns.rm(file)) {
-                success++;
-                ns.print(`✓ 已删除：${file}`);
-            } else {
-                failures++;
-                ns.print(`✗ 删除失败：${file}`);
+        try {
+            for (const file of files) {
+                try {
+                    if (ns.rm(file)) {
+                        success++;
+                        ns.print(`✓ 已删除：${file}`);
+                    } else {
+                        failures++;
+                        ns.print(`✗ 删除失败：${file}`);
+                    }
+                } catch (error) {
+                    failures++;
+                    handleError(ns, error, `删除文件 ${file} 时发生错误`);
+                }
             }
-        }
 
-        const report = `操作完成：成功删除 ${success} 个文件，失败 ${failures} 个。`;
-        ns.toast(report, success > 0 ? "success" : "error", 3000);
-        if (failures > 0) ns.toast("提示：失败文件可能正在运行或权限不足", "warning", 3000);
+            const report = `操作完成：成功删除 ${success} 个文件，失败 ${failures} 个。`;
+            ns.toast(report, success > 0 ? "success" : "error", 3000);
+            if (failures > 0) ns.toast("提示：失败文件可能正在运行或权限不足", "warning", 3000);
+        } catch (error) {
+            handleError(ns, error, '批量删除文件时发生错误');
+        }
     }
 
     // ========================
@@ -257,10 +327,15 @@ export async function main(ns) {
             return ns.alert(`❌ 目标文件 ${newName} 已存在！`);
         }
 
-        const success = ns.mv('home', oldPath, newName);
-        if (success) {
-            ns.toast(`✅ 脚本重命名为 ${newName}`, 'success', 3000);
-        } else {
+        try {
+            const success = ns.mv('home', oldPath, newName);
+            if (success) {
+                ns.toast(`✅ 脚本重命名为 ${newName}`, 'success', 3000);
+            } else {
+                throw new Error('重命名失败，请检查路径权限');
+            }
+        } catch (error) {
+            handleError(ns, error, `重命名脚本 ${oldPath} -> ${newName} 时发生错误`);
             ns.toast(`❌ 重命名失败，请检查路径权限`, 'error', 5000);
         }
     }
@@ -298,49 +373,58 @@ export async function main(ns) {
 
         const actualPath = allScripts[scriptChoices.indexOf(selected)];
 
-        // 预加载脚本信息
-        const [scriptInfo] = await preloadScriptInfo(ns, [actualPath]);
-
-        // 检查脚本是否存在
-        if (!scriptInfo) {
-            return ns.alert(`❌ 错误：脚本 ${actualPath} 不存在！`);
-        }
-
-        // 如果脚本正在运行，提示用户确认
-        if (scriptInfo.running) {
-            const confirm = await ns.prompt(
-                `脚本 ${actualPath} 已经在运行（使用 ${scriptInfo.ram.toFixed(2)} GB RAM），是否继续启动新实例？`,
-                { type: "boolean" }
-            );
-            if (!confirm) return;
-        }
-
-        // 获取线程数
-        let threads = 1;
         try {
-            const threadInput = await ns.prompt("启动线程数 (1-" + THREAD_LIMIT + ")", {
-                type: "text",
-                default: 1,
-                validate: input => {
-                    if (isNaN(input)) return "必须输入数字";
-                    if (input < 1) return "至少1线程";
-                    if (input > THREAD_LIMIT) return `超过最大限制 ${THREAD_LIMIT}`;
-                    return true;
+            // 预加载脚本信息
+            const [scriptInfo] = await preloadScriptInfo(ns, [actualPath]);
+
+            // 检查脚本是否存在
+            if (!scriptInfo) {
+                return ns.alert(`❌ 错误：脚本 ${actualPath} 不存在！`);
+            }
+
+            // 如果脚本正在运行，提示用户确认
+            if (scriptInfo.running) {
+                const confirm = await ns.prompt(
+                    `脚本 ${actualPath} 已经在运行（使用 ${scriptInfo.ram.toFixed(2)} GB RAM），是否继续启动新实例？`,
+                    { type: "boolean" }
+                );
+                if (!confirm) return;
+            }
+
+            // 获取线程数
+            let threads = 1;
+            try {
+                const threadInput = await ns.prompt("启动线程数 (1-" + THREAD_LIMIT + ")", {
+                    type: "text",
+                    default: 1,
+                    validate: input => {
+                        if (isNaN(input)) return "必须输入数字";
+                        if (input < 1) return "至少1线程";
+                        if (input > THREAD_LIMIT) return `超过最大限制 ${THREAD_LIMIT}`;
+                        return true;
+                    }
+                });
+                threads = parseInt(threadInput);
+            } catch (error) {
+                handleError(ns, error, '设置线程数时发生错误');
+                ns.toast("线程数设置失败，使用默认值1", "warning", 2000);
+            }
+
+            // 启动脚本
+            try {
+                const pid = ns.run(actualPath, threads);
+                if (pid) {
+                    ns.toast(`✅ 已启动 ${truncateName(actualPath, 30)} (PID: ${pid})`, 'success', 3000);
+                    if (DEBUG_MODE) ns.tprint(`[DEBUG] 启动成功 | 路径: ${actualPath} | 线程: ${threads}`);
+                } else {
+                    throw new Error('启动失败，请检查脚本参数');
                 }
-            });
-            threads = parseInt(threadInput);
+            } catch (error) {
+                handleError(ns, error, `启动脚本 ${actualPath} 时发生错误`);
+                ns.toast(`❌ 启动失败，请检查脚本参数`, 'error', 5000);
+            }
         } catch (error) {
-            ns.toast("线程数设置失败，使用默认值1", "warning", 2000);
-        }
-
-        // 启动脚本
-        const pid = ns.run(actualPath, threads);
-
-        if (pid) {
-            ns.toast(`✅ 已启动 ${truncateName(actualPath, 30)} (PID: ${pid})`, 'success', 3000);
-            if (DEBUG_MODE) ns.tprint(`[DEBUG] 启动成功 | 路径: ${actualPath} | 线程: ${threads}`);
-        } else {
-            ns.toast(`❌ 启动失败，请检查脚本参数`, 'error', 5000);
+            handleError(ns, error, '处理脚本启动时发生错误');
         }
     }
 
@@ -419,6 +503,22 @@ export async function main(ns) {
     function isDirectoryExists(ns, dirPath) {
         const normalizedDir = normalizePath(dirPath);
         return ns.ls('home').some(file => normalizePath(file).startsWith(normalizedDir));
+    }
+
+    // ========================
+    // 错误处理与日志记录
+    // ========================
+    function logError(ns, error, context = '') {
+        const timestamp = new Date().toISOString();
+        const errorMessage = `[ERROR] ${timestamp} | ${context}\n${error.stack || error}`;
+        ns.tprint(errorMessage);
+        ns.write('error.log', errorMessage + '\n', 'a');
+    }
+
+    // 全局错误处理
+    function handleError(ns, error, context = '') {
+        logError(ns, error, context);
+        ns.toast(`❌ 发生错误：${error.message}`, 'error', 5000);
     }
 
     // ========================
