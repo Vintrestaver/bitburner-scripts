@@ -479,24 +479,71 @@ export async function main(ns) {
         /** @param {NS} ns */
         static #determineOptimalTask(ns, member, gangInfo, shouldWarfare) {
             const memberInfo = ns.gang.getMemberInformation(member);
-            const stats = memberInfo.str + memberInfo.def + memberInfo.dex + memberInfo.agi;
-            const maxStats = Math.max(...ns.gang.getMemberNames().map(m => {
-                const info = ns.gang.getMemberInformation(m);
-                return info.str + info.def + info.dex + info.agi;
-            }));
+            
+            // 使用加权统计计算（战斗属性权重更高）
+            const stats = (memberInfo.str * 1.2) + (memberInfo.def * 1.1) + 
+                        memberInfo.dex + memberInfo.agi;
+            
+            // 动态计算统计阈值（基于帮派发展阶段）
+            const isEarlyGame = gangInfo.respect < 1e6;
+            const hardMin = isEarlyGame ? CONFIG.THRESHOLDS.STATS_HARD_MIN : 
+                Math.max(CONFIG.THRESHOLDS.STATS_HARD_MIN, gangInfo.respect / 1e5);
+            
+            // 获取成员成长率数据
+            const growthRate = StatsTracker.getGrowthRate(member) || { str: 0, def: 0, dex: 0, agi: 0 };
+            const avgGrowth = (growthRate.str + growthRate.def + growthRate.dex + growthRate.agi) / 4;
 
-            if (stats < CONFIG.THRESHOLDS.STATS_HARD_MIN ||
-                stats < maxStats * CONFIG.THRESHOLDS.STATS_THRESHOLD) {
-                return CONFIG.TASKS.TRAIN;
+            // 训练条件优化（考虑成长率和晋升潜力）
+            const shouldTrain = stats < hardMin || 
+                (avgGrowth < 0.5 && stats < CONFIG.THRESHOLDS.STATS_HARD_MIN * 2) ||
+                (ns.gang.getAscensionResult(member)?.mult ?? 1) > 1.2;
+
+            if (shouldTrain) {
+                return Math.random() < CONFIG.THRESHOLDS.TRAIN_CHANCE ? 
+                    CONFIG.TASKS.TRAIN : this.#getAlternativeTrainingTask(ns, memberInfo);
             }
 
-            if (gangInfo.wantedPenalty < CONFIG.THRESHOLDS.WANTED_PENALTY) {
-                return CONFIG.TASKS.VIGI;
+            // 动态调整治安需求（基于帮派规模）
+            const wantedThreshold = CONFIG.THRESHOLDS.WANTED_PENALTY * 
+                (1 - 0.05 * Math.min(10, ns.gang.getMemberNames().length));
+            
+            if (gangInfo.wantedPenalty < wantedThreshold) {
+                return this.#getOptimalCrimeTask(ns, memberInfo);
             }
 
+            // 战争阶段优化（考虑装备水平）
+            const hasCombatGear = memberInfo.upgrades.some(e => e.includes('Weapon') || e.includes('Armor'));
+            const warfareReady = hasCombatGear && memberInfo.str > 500;
+            
+            // 最终任务决策树
             return ns.gang.getMemberNames().length < CONFIG.THRESHOLDS.MEMBERS.MIN ? CONFIG.TASKS.NOOB :
-                gangInfo.respect < CONFIG.THRESHOLDS.RESPECT_MIN ? CONFIG.TASKS.RESPECT :
-                    shouldWarfare ? CONFIG.TASKS.WARFARE : CONFIG.TASKS.MONEY;
+                gangInfo.respect < CONFIG.THRESHOLDS.RESPECT_MIN ? this.#getRespectTask(ns, memberInfo) :
+                    (shouldWarfare && warfareReady) ? CONFIG.TASKS.WARFARE : 
+                    this.#getMoneyTask(ns, memberInfo);
+        }
+
+        // 新增辅助方法
+        static #getAlternativeTrainingTask(ns, memberInfo) {
+            const stats = [memberInfo.str, memberInfo.def, memberInfo.dex, memberInfo.agi];
+            const minStatIndex = stats.indexOf(Math.min(...stats));
+            return ['Train Combat', 'Train Strength', 'Train Defense', 'Train Dexterity', 'Train Agility'][minStatIndex];
+        }
+
+        static #getOptimalCrimeTask(ns, memberInfo) {
+            const crimes = ['Vigilante Justice', 'Traffick Illegal Arms', 'Money Laundering'];
+            const successRates = crimes.map(c => ns.gang.getTaskStats(c).difficulty);
+            return crimes[successRates.indexOf(Math.min(...successRates))];
+        }
+
+        static #getRespectTask(ns, memberInfo) {
+            return memberInfo.str > 1000 ? 'Terrorism' : 'Armed Robbery';
+        }
+
+        static #getMoneyTask(ns, memberInfo) {
+            const moneyTasks = ['Human Trafficking', 'Deal Drugs', 'Grand Theft Auto'];
+            return moneyTasks.reduce((a, b) => 
+                ns.gang.getTaskStats(a).money > ns.gang.getTaskStats(b).money ? a : b
+            );
         }
     }
 
@@ -536,11 +583,17 @@ export async function main(ns) {
             const factionName = info.faction ? info.faction.toString() : '未知帮派';
             const respectValue = info.respect ? ns.formatNumber(info.respect, 1) : '0';
             const powerValue = info.power ? ns.formatNumber(info.power, 1) : '0';
+            const territory = info.territory ? ns.formatPercent(info.territory, 1) : '0%';
+
+            // 添加帮派发展阶段指示器
+            const gameStage = info.respect < 1e6 ? '初期' : 
+                           info.respect < 1e7 ? '中期' : '后期';
 
             ns.print('╔═════════════════════════════════════════════════════════════════╗');
-            ns.print(`║ ${cycleSymbol} ${factionName.padEnd(14)} ` +
-                `Respect: ${respectValue.padEnd(9)} ` +
-                `Power: ${powerValue.padEnd(20)} ║`);
+            ns.print(`║ ${cycleSymbol} ${factionName.padEnd(12)} [${gameStage}] ` +
+                `Respect: ${respectValue.padEnd(8)} ` +
+                `Power: ${powerValue.padEnd(8)} ` +
+                `领土: ${territory.padEnd(6)} ║`);
             ns.print('╠═════════╦══════════════════╦══════════╦═════════════════════════╣');
             ns.print('║ Member  ║      Task        ║  Stats   ║      Equipment          ║');
             ns.print('╠═════════╬══════════════════╬══════════╬═════════════════════════╣');
