@@ -323,35 +323,47 @@ export async function main(ns) {
     // ===================== 仪表盘 =====================
     function displayDashboard() {
         ns.print("═".repeat(80)); // 打印分隔线
-        ns.print(`${COLORS.header}─[ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ]─[ 量化交易系统 ${CONFIG.V} ]` + '─'.repeat(45)); // 打印头部信息
+        // 头部信息 - 添加市场状态
+        const marketStateColor = MARKET_STATE.regime === 'trending' ? COLORS.bullish : 
+                                MARKET_STATE.regime === 'volatile' ? COLORS.warning : 
+                                MARKET_STATE.regime === 'stagnant' ? COLORS.info : COLORS.reset;
+        ns.print(`${COLORS.header}─[ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ]─[ 量化交易系统 ${CONFIG.V} ]─[ 市场状态: ${marketStateColor}${MARKET_STATE.regime}${COLORS.header} ]` + '─'.repeat(30));
 
-        const volColor = getRisk() > 0.2 ? COLORS.warning : COLORS.info; // 根据风险设置颜色
+        // 关键指标 - 添加波动率和动量
+        const volColor = getRisk() > 0.2 ? COLORS.warning : COLORS.info;
         ns.print([
-            `${COLORS.info}资产: ${fmtMoney(getNetWorth())}${COLORS.reset}`, // 净资产
-            `${COLORS.profit}盈利: ${fmtMoney(STATE.metrics.totalProfit)}${COLORS.reset}`, // 总利润
-            `${COLORS.warning}回撤: ${fmtPct(STATE.metrics.maxDrawdown)}${COLORS.reset}`, // 最大回撤
-            `${COLORS.highlight}杠杆: ${getLeverage().toFixed(1)}x${COLORS.reset}`, // 杠杆倍数
-            `${volColor}风险: ${getRisk().toFixed(2)}${COLORS.reset}` // 风险水平
-        ].join(' | ')); // 打印关键指标
+            `${COLORS.info}资产: ${fmtMoney(getNetWorth())}${COLORS.reset}`,
+            `${COLORS.profit}盈利: ${fmtMoney(STATE.metrics.totalProfit)}${COLORS.reset}`,
+            `${COLORS.warning}回撤: ${fmtPct(STATE.metrics.maxDrawdown)}${COLORS.reset}`,
+            `${COLORS.highlight}杠杆: ${getLeverage().toFixed(1)}x${COLORS.reset}`,
+            `${volColor}风险: ${getRisk().toFixed(2)}${COLORS.reset}`,
+            `${COLORS.info}波动率: ${fmtPct(MARKET_STATE.volatility)}${COLORS.reset}`,
+            `${COLORS.highlight}动量: ${fmtPct(MARKET_STATE.momentum)}${COLORS.reset}`
+        ].join(' | '));
         ns.print("═".repeat(80)); // 打印分隔线
 
-        ns.print(`${COLORS.header}──📦 持仓信息 ${'─'.repeat(80 - 14)}${COLORS.reset}`); // 打印持仓标题
+        ns.print(`${COLORS.header}──📦 持仓信息 ${'─'.repeat(80 - 14)}${COLORS.reset}`);
         getActivePositions()
-            .sort((a, b) => b.totalProfit - a.totalProfit) // 按利润排序
-            .slice(0, CONFIG.DISPLAY_ROWS) // 截取显示行数
-            .forEach((p, i) => ns.print(fmtPosition(p, i + 1))); // 打印持仓信息
-        ns.print("═".repeat(80)); // 打印分隔线
+            .sort((a, b) => b.totalProfit - a.totalProfit)
+            .slice(0, CONFIG.DISPLAY_ROWS)
+            .forEach((p, i) => ns.print(fmtPosition(p, i + 1)));
+        ns.print("═".repeat(80));
 
-        ns.print(`${COLORS.header}──📜 最近交易记录 ${'─'.repeat(80 - 20)}${COLORS.reset}`); // 打印交易记录标题
+        // 改进交易记录显示
+        ns.print(`${COLORS.header}──📜 交易记录 (最近5笔) ${'─'.repeat(80 - 24)}${COLORS.reset}`);
         STATE.transactions.slice(-5).forEach(t => {
-            const profitColor = t.profit >= 0 ? COLORS.profit : COLORS.loss; // 根据收益设置颜色
+            const profitColor = t.profit >= 0 ? COLORS.profit : COLORS.loss;
+            const directionIcon = t.shares > 0 ? '📈' : '📉';
+            const actionType = t.shares > 0 ? '买入' : '卖出';
+            
             ns.print(
-                ` ${COLORS.info}${t.time} ${t.icon.padEnd(5)} ` +
+                ` ${COLORS.info}${t.time} ` +
+                `${directionIcon} ${actionType} ` +
                 `${getTrendColor(t.sym)}${t.sym.padEnd(5)} ` +
                 `${COLORS.highlight}${fmtNum(Math.abs(t.shares))}@${fmtNum(t.price)} ` +
                 `${profitColor}${t.profit >= 0 ? '▲' : '▼'} ` +
                 `${t.profit != 0 ? fmtMoney(t.profit) : ''}${COLORS.reset}`
-            ); // 打印交易记录
+            );
         });
     }
 
@@ -368,45 +380,53 @@ export async function main(ns) {
 
     function fmtPosition(pos, index) {
         const rsiColor = pos.rsi < 30 ? COLORS.rsiLow :
-            pos.rsi > 70 ? COLORS.rsiHigh : COLORS.rsiMid; // 根据RSI值返回颜色
+            pos.rsi > 70 ? COLORS.rsiHigh : COLORS.rsiMid;
         const volColor = pos.volatility > CONFIG.VOLATILITY_FILTER
-            ? COLORS.warning : COLORS.reset; // 根据波动率返回颜色
+            ? COLORS.warning : COLORS.reset;
         const trendIcon = pos.trend === 'bull'
             ? `${COLORS.bullish}▲${COLORS.reset}`
-            : `${COLORS.bearish}▼${COLORS.reset}`; // 根据趋势返回图标
+            : `${COLORS.bearish}▼${COLORS.reset}`;
 
-        const longRatio = pos.long[0] / pos.maxShares; // 长仓比例
-        const shortRatio = pos.short[0] / pos.maxShares; // 短仓比例
+        const longRatio = pos.long[0] / pos.maxShares;
+        const shortRatio = pos.short[0] / pos.maxShares;
 
+        // 改进仓位显示 - 添加进度条标签
         const longDisplay = pos.long[0] > 0 ?
-            `${COLORS.info}📈:${fmtNum(pos.long[0])} ${getBar(longRatio, COLORS.bullish)}` : ''; // 长仓显示
+            `${COLORS.info}📈 ${fmtPct(longRatio)} ${getBar(longRatio, COLORS.bullish)}` : '';
         const shortDisplay = pos.short[0] > 0 ?
-            `${COLORS.highlight}📉:${fmtNum(pos.short[0])} ${getBar(shortRatio, COLORS.bearish)}` : ''; // 短仓显示
+            `${COLORS.highlight}📉 ${fmtPct(shortRatio)} ${getBar(shortRatio, COLORS.bearish)}` : '';
 
+        // 添加持仓时间计算
+        const holdingTime = pos.entryTime ? 
+            ns.tFormat(Date.now() - pos.entryTime, true) : '新仓';
+            
         return [
-            ` ${index.toString().padStart(2)} ${pos.sym.padEnd(5)} ${trendIcon}`, // 序号、股票代码、趋势图标
-            `${rsiColor}RSI:${pos.rsi.toFixed(0).padEnd(3)}${COLORS.reset}`, // RSI值
-            `${volColor}VOL:${fmtPct(pos.volatility)}${COLORS.reset}`, // 波动率
-            `FOR:${fmtPct(pos.forecast)}`, // 预测值
-            `${longDisplay}${shortDisplay}`, // 仓位显示
-            `${pos.totalProfit >= 0 ? COLORS.profit : COLORS.loss}${fmtMoney(pos.totalProfit)}` // 总利润
-        ].join(' │ '); // 返回格式化的持仓信息
+            ` ${index.toString().padStart(2)} ${pos.sym.padEnd(5)} ${trendIcon}`,
+            `${rsiColor}RSI:${pos.rsi.toFixed(0).padEnd(3)}${COLORS.reset}`,
+            `${volColor}VOL:${fmtPct(pos.volatility)}${COLORS.reset}`,
+            `FOR:${fmtPct(pos.forecast)}`,
+            `${longDisplay}${shortDisplay}`,
+            `${COLORS.info}${holdingTime}${COLORS.reset}`,
+            `${pos.totalProfit >= 0 ? COLORS.profit : COLORS.loss}${fmtMoney(pos.totalProfit)}`
+        ].join(' │ ');
     }
 
     function logTransaction(icon, sym, shares, price, profit = 0) {
         const record = {
-            timestamp: Date.now(), // 时间戳
-            time: new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 8), // 时间
-            icon: icon, // 图标
-            sym: sym, // 股票代码
-            shares: shares, // 股份数量
-            price: price, // 价格
-            profit: profit, // 收益
+            timestamp: Date.now(),
+            time: new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 8),
+            icon: icon,
+            sym: sym,
+            shares: shares,
+            price: price,
+            profit: profit,
+            // 添加交易类型标识
+            type: shares > 0 ? 'buy' : 'sell',
             context: {
-                volatility: getMarketVolatility(), // 波动率
-                positionRatio: shares / ns.stock.getMaxShares(sym), // 仓位比例
-                riskLevel: CONFIG.RISK_PER_TRADE, // 风险级别
-                portfolioValue: getNetWorth() // 资产净值
+                volatility: getMarketVolatility(),
+                positionRatio: Math.abs(shares) / ns.stock.getMaxShares(sym),
+                riskLevel: CONFIG.RISK_PER_TRADE,
+                portfolioValue: getNetWorth()
             }
         };
 
