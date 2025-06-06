@@ -141,27 +141,8 @@ export async function main(ns) {
         }
     }
 
-
     // 主循环
     while (runScript) {
-        // 第一次运行时记录初始资产(如果不存在)
-        if (!ns.fileExists("initial_assets.txt")) {
-            let initialWorth = 0;
-            for (const stock of ns.stock.getSymbols()) {
-                const position = ns.stock.getPosition(stock);
-                if (position[0] > 0 || position[2] > 0) {
-                    let longShares = position[0];
-                    let longPrice = position[1];
-                    let shortShares = position[2];
-                    let shortPrice = position[3];
-                    let bidPrice = ns.stock.getBidPrice(stock);
-                    let profit = longShares * (bidPrice - longPrice) - (2 * 100000);
-                    let profitShort = shortShares * Math.abs(bidPrice - shortPrice) - (2 * 100000);
-                    initialWorth += profitShort + profit + (longShares * longPrice) + (shortShares * shortPrice);
-                }
-            }
-            ns.write("initial_assets.txt", (initialWorth + ns.getPlayer().money).toString(), "w");
-        }
         // 按有利预测顺序获取股票
         let orderedStocks = ns.stock.getSymbols().sort(function (a, b) {
             return Math.abs(0.5 - ns.stock.getForecast(b)) - Math.abs(0.5 - ns.stock.getForecast(a));
@@ -204,14 +185,11 @@ export async function main(ns) {
 
         // 增强版状态输出
         const totalAssets = currentWorth + ns.getPlayer().money;
-        const initialAssets = Number(ns.read("initial_assets.txt") || totalAssets);
-        const totalReturn = (totalAssets - initialAssets) / initialAssets;
 
         ns.print("══════════════════════════════════");
         ns.print(`  📈 股票总价值: ${format(currentWorth)}`);
         ns.print(`  💰 可用现金: ${format(ns.getPlayer().money)}`);
         ns.print(`  🏦 总净资产: ${format(totalAssets)}`);
-        ns.print(`  📊 总收益率: ${totalReturn >= 0 ? '\x1b[32m' : '\x1b[31m'}${ns.formatPercent(totalReturn, 1)}\x1b[0m`);
         ns.print(`  🕒 ${new Date().toLocaleTimeString()}`);
         ns.print("══════════════════════════════════");
 
