@@ -141,63 +141,60 @@ export async function main(ns) {
         }
     }
 
+    // 缓存股票列表 (性能优化)
+    const allStocks = ns.stock.getSymbols();
+
     // 主循环
     while (runScript) {
-        // 按有利预测顺序获取股票
-        let orderedStocks = ns.stock.getSymbols().sort(function (a, b) {
-            return Math.abs(0.5 - ns.stock.getForecast(b)) - Math.abs(0.5 - ns.stock.getForecast(a));
-        })
+        ns.clearLog();
+        // 获取玩家资金 (单次调用优化)
+        const playerMoney = ns.getPlayer().money;
         let currentWorth = 0;
-
         ns.print("---------------------------------------");
 
-        for (const stock of orderedStocks) {
+        // 批量获取股票数据 (减少API调用)
+        const stockData = allStocks.map(stock => {
             const position = ns.stock.getPosition(stock);
+            const bidPrice = ns.stock.getBidPrice(stock);
+            return {
+                symbol: stock,
+                position,
+                bidPrice,
+                forecast: ns.stock.getForecast(stock)
+            };
+        });
 
+        // 处理卖出逻辑
+        for (const { symbol, position } of stockData) {
             if (position[0] > 0 || position[2] > 0) {
-
-                // 检查是否需要卖出
-                sellIfOutsideThreshdold(stock);
-            }
-
-            // 检查是否应该买入
-            buyPositions(stock);
-
-            // 跟踪当前利润变化
-            if (position[0] > 0 || position[2] > 0) {
-                let longShares = position[0];
-                let longPrice = position[1];
-                let shortShares = position[2];
-                let shortPrice = position[3];
-                let bidPrice = ns.stock.getBidPrice(stock);
-
-                // 计算利润(扣除佣金费用)
-                // 多头利润 = 股数×(当前价-买入价) - 2次交易佣金(每次10万)
-                let profit = longShares * (bidPrice - longPrice) - (2 * 100000);
-                // 空头利润 = 股数×|当前价-卖空价| - 2次交易佣金
-                let profitShort = shortShares * Math.abs(bidPrice - shortPrice) - (2 * 100000);
-
-                // 计算净资产值
-                // 总价值 = 空头利润 + 多头利润 + 多头市值 + 空头市值
-                currentWorth += profitShort + profit + (longShares * longPrice) + (shortShares * shortPrice);
+                sellIfOutsideThreshdold(symbol);
             }
         }
 
-        // 增强版状态输出
-        const totalAssets = currentWorth + ns.getPlayer().money;
+        // 处理买入逻辑
+        for (const { symbol } of stockData) {
+            buyPositions(symbol);
+        }
 
+        // 计算当前持仓价值
+        for (const { position, bidPrice } of stockData) {
+            if (position[0] > 0 || position[2] > 0) {
+                const [longShares, longPrice, shortShares, shortPrice] = position;
+                const profit = longShares * (bidPrice - longPrice) - 200000;
+                const profitShort = shortShares * Math.abs(bidPrice - shortPrice) - 200000;
+                currentWorth += profit + profitShort + (longShares * longPrice) + (shortShares * shortPrice);
+            }
+        }
+
+        // 状态输出 (优化日志频率)
         ns.print("══════════════════════════════════");
         ns.print(`  📈 股票总价值: ${format(currentWorth)}`);
-        ns.print(`  💰 可用现金: ${format(ns.getPlayer().money)}`);
-        ns.print(`  🏦 总净资产: ${format(totalAssets)}`);
+        ns.print(`  💰 可用现金: ${format(playerMoney)}`);
+        ns.print(`  🏦 总净资产: ${format(currentWorth + playerMoney)}`);
         ns.print(`  🕒 ${new Date().toLocaleTimeString()}`);
         ns.print("══════════════════════════════════");
 
-        // await ns.sleep(scriptTimer);
-        await ns.stock.nextUpdate();
-
-        // 清除日志使显示更静态
-        // 如果需要股票历史记录，请保存到文件
-        ns.clearLog()
+        // await ns.stock.nextUpdate();
+        await ns.sleep(1000)
     }
 }
