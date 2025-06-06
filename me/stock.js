@@ -10,10 +10,10 @@ export async function main(ns) {
     const stockBuyOver_Long = 0.60;     // 当预测高于此百分比时买入股票
     const stockBuyUnder_Short = 0.40;   // 当预测低于此百分比时买入股票(如果解锁卖空功能)
     const stockVolatility = 0.03;   // 允许的最大波动率(5%)
-    const minShare = 1000;    
+    const minShare = 1000;
     const maxSharePercent = 0.8;   // 最大买入百分比(100%)
-    const sellThreshold_Long = 0.50;    // 当上涨概率低于此值时卖出多头    
-    const sellThreshold_Short = 0.40;   // 当下跌概率高于此值时卖出空头
+    const sellThreshold_Long = 0.55;    // 当上涨概率低于此值时卖出多头    
+    const sellThreshold_Short = 0.45;   // 当下跌概率高于此值时卖出空头
     const shortUnlock = false;      // 是否解锁卖空功能(如果解锁则允许卖空)
     const runScript = true; // 是否运行脚本(如果需要停止脚本，请将此值设置为false)
     const toastDuration = 15000;   // 提示消息持续时间(毫秒)
@@ -105,9 +105,10 @@ export async function main(ns) {
             let profit = position[0] * (ns.stock.getBidPrice(stock) - position[1]) - (200000);  // 计算利润(扣除佣金费用)
 
             // 打印股票预测信息
-            ns.print(stock + ' 4S Forecast -> ' + (Math.round(forecast * 100) + '%   ' + forcastDisplay));
-            ns.print('      Position -> ' + ns.formatNumber(position[0], 2));
-            ns.print('      Profit -> ' + ns.formatNumber(profit, 2));
+            ns.print(`${stock.padEnd(5)} 4S Forecast -> ${ns.formatPercent(forecast, 1)}   ${forcastDisplay}`);
+
+            ns.print('       Position -> ' + format(position[0]));
+            ns.print('       Profit -> ' + format(profit));
 
             // 检查是否需要卖出多头股票           
             if (forecast < sellThreshold_Long) {
@@ -183,7 +184,8 @@ export async function main(ns) {
         ns.print(new Date().toLocaleTimeString() + ' - Running ...');
         ns.print("---------------------------------------");
 
-        await ns.sleep(scriptTimer);
+        // await ns.sleep(scriptTimer);
+        await ns.stock.nextUpdate();
 
         // 清除日志使显示更静态
         // 如果需要股票历史记录，请保存到文件
