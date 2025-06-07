@@ -126,9 +126,11 @@ export async function main(ns) {
             const profitPct = profit / (position[0] * position[1]);
 
             // 打印增强版股票信息
-            ns.print(`${stock.padEnd(5)} Forecast ${ns.formatPercent(forecast, 1).padStart(6)} ${forecastBar}`);
-            ns.print(`       Position: ${format(position[0])} (${ns.formatPercent(position[0] / ns.stock.getMaxShares(stock), 1)} of max)`);
-            ns.print(`       ${profitColor}Profit: ${format(profit)} (${ns.formatPercent(profitPct, 1)})${profit >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
+            ns.print(`📊 ${stock.padEnd(5)} ${forecastBar} ${ns.formatPercent(forecast, 1).padStart(6)}`);
+            ns.print(`├─ Position: ${format(position[0])} (${ns.formatPercent(position[0] / ns.stock.getMaxShares(stock), 1)} of max)`);
+            ns.print(`├─ Avg Cost: ${format(position[1])}`);
+            ns.print(`├─ Current: ${format(ns.stock.getBidPrice(stock))}`);
+            ns.print(`└─ ${profitColor}Profit: ${format(profit)} (${ns.formatPercent(profitPct, 1)})${profit >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
 
             // 检查是否需要卖出多头股票           
             // 检查是否需要卖出多头股票（基于预测阈值或止盈止损）
@@ -217,12 +219,13 @@ export async function main(ns) {
         }
 
         // 状态输出 (优化日志频率)
-        ns.print("══════════════════════════════════");
-        ns.print(`  📈 股票总价值: ${format(currentWorth)}`);
-        ns.print(`  💰 可用现金: ${format(playerMoney)}`);
-        ns.print(`  🏦 总净资产: ${format(currentWorth + playerMoney)}`);
-        ns.print(`  🕒 ${new Date().toLocaleTimeString()}`);
-        ns.print("══════════════════════════════════");
+        ns.print("╔════════════════════════════════╗");
+        ns.print(`║ 📈 股票总价值: ${format(currentWorth).padEnd(20)} ║`);
+        ns.print(`║ 💰 可用现金: ${format(playerMoney).padEnd(21)} ║`);
+        ns.print(`║ 🏦 总净资产: ${format(currentWorth + playerMoney).padEnd(20)} ║`);
+        ns.print(`║ 🎯 止盈/止损: ${ns.formatPercent(takeProfit, 1)}/${ns.formatPercent(stopLoss, 1)}`);
+        ns.print(`║ 🕒 ${new Date().toLocaleTimeString().padEnd(23)} ║`);
+        ns.print("╚════════════════════════════════╝");
 
         // await ns.stock.nextUpdate();
         await ns.sleep(1000)
