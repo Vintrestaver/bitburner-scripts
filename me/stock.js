@@ -149,6 +149,7 @@ export async function main(ns) {
 
                 if (boughtFor > 0) {
                     ns.toast(`买入 ${Math.round(shares)} 股 ${stock}，金额 ${format(boughtFor)}`, 'success', toastDuration);
+                    buyCount++;
                 }
             }
         }
@@ -179,6 +180,7 @@ export async function main(ns) {
 
                     if (boughtFor > 0) {
                         ns.toast(`卖空 ${Math.round(shares)} 股 ${stock}，金额 ${format(boughtFor)}`, 'success', toastDuration);
+                        buyCount++;
                     }
                 }
             }
@@ -224,9 +226,10 @@ export async function main(ns) {
                 rsiDecline ||
                 topDivergence;
 
-            if (sellCondition) {
-                ns.stock.sellStock(stock, position[0]);
-                let reason = "";
+                if (sellCondition) {
+                    ns.stock.sellStock(stock, position[0]);
+                    sellCount++;
+                    let reason = "";
                 if (profitPct >= takeProfit) reason = "止盈";
                 else if (profitPct <= stopLoss) reason = "止损";
                 else if (macdDeathCross) reason = "MACD死叉";
@@ -268,9 +271,10 @@ export async function main(ns) {
                 rsiRecovery ||
                 bottomDivergence;
 
-            if (sellCondition) {
-                ns.stock.sellShort(stock, position[2]);
-                let reason = "";
+                if (sellCondition) {
+                    ns.stock.sellShort(stock, position[2]);
+                    sellCount++;
+                    let reason = "";
                 if (profitPct >= takeProfit) reason = "止盈";
                 else if (profitPct <= stopLoss) reason = "止损";
                 else if (macdGoldenCross) reason = "MACD金叉";
@@ -289,6 +293,10 @@ export async function main(ns) {
     const priceHistory = {};
     const macdHistory = {};
     const rsiHistory = {};
+    
+    // 交易统计
+    let buyCount = 0;
+    let sellCount = 0;
 
     for (const stock of allStocks) {
         priceHistory[stock] = [];
@@ -349,13 +357,62 @@ export async function main(ns) {
             }
         }
 
-        // 状态输出
-        ns.print("══════════════════════════════════");
-        ns.print(`  📈 股票总价值: ${format(currentWorth)}`);
-        ns.print(`  💰 可用现金: ${format(playerMoney)}`);
-        ns.print(`  🏦 总净资产: ${format(currentWorth + playerMoney)}`);
-        ns.print(`  🕒 ${new Date().toLocaleTimeString()}`);
-        ns.print("══════════════════════════════════");
+    // 状态输出 - 优化日志
+    ns.print("══════════════════════════════════════════════════════════");
+    ns.print(`  🏦 总净资产: \x1b[36m${format(currentWorth + playerMoney)}\x1b[0m | 💰 可用现金: ${format(playerMoney)} | 📈 股票价值: ${format(currentWorth)}`);
+    ns.print(`  🕒 ${new Date().toLocaleTimeString()} | 交易统计: 买入 ${buyCount}次 | 卖出 ${sellCount}次`);
+    ns.print("──────────────────────────────────────────────────────────");
+    
+    // 显示持仓股票详情
+    let hasPosition = false;
+    for (const stock of allStocks) {
+        const position = ns.stock.getPosition(stock);
+        if (position[0] > 0 || position[2] > 0) {
+            hasPosition = true;
+            const bidPrice = ns.stock.getBidPrice(stock);
+            let stockInfo = "";
+            
+            if (position[0] > 0) { // 多头持仓
+                const cost = position[1];
+                const profit = (bidPrice - cost) * position[0];
+                const profitPct = (bidPrice - cost) / cost;
+                stockInfo += `  🟢 ${stock}: ${ns.formatNumber(position[0])}股 | 成本:${ns.formatNumber(cost, 3)} | 现价:${ns.formatNumber(bidPrice, 3)} | 盈亏:${format(profit)} (${ns.formatPercent(profitPct)})`;
+            }
+            
+            if (position[2] > 0) { // 空头持仓
+                const cost = position[3];
+                const profit = (cost - bidPrice) * position[2];
+                const profitPct = (cost - bidPrice) / cost;
+                if (stockInfo !== "") stockInfo += "\n";
+                stockInfo += `  🔴 ${stock}: ${ns.formatNumber(position[2])}股(空) | 成本:${ns.formatNumber(cost, 3)} | 现价:${ns.formatNumber(bidPrice, 3)} | 盈亏:${format(profit)} (${ns.formatPercent(profitPct)})`;
+            }
+            
+            // 添加技术指标状态
+            if (priceHistory[stock].length > MACD_LONG_PERIOD) {
+                const macdData = macdHistory[stock][macdHistory[stock].length - 1] || {};
+                const rsi = rsiHistory[stock][rsiHistory[stock].length - 1] || 50;
+                
+                let macdStatus = "MACD:";
+                if (macdData.histogram > 0) macdStatus += ` \x1b[32m${macdData.histogram.toFixed(4)}\x1b[0m`;
+                else macdStatus += ` \x1b[31m${macdData.histogram.toFixed(4)}\x1b[0m`;
+                
+                let rsiStatus = "RSI:";
+                if (rsi > 70) rsiStatus += ` \x1b[31m${rsi.toFixed(2)}\x1b[0m`;
+                else if (rsi < 30) rsiStatus += ` \x1b[32m${rsi.toFixed(2)}\x1b[0m`;
+                else rsiStatus += ` ${rsi.toFixed(2)}`;
+                
+                stockInfo += ` | ${macdStatus} | ${rsiStatus}`;
+            }
+            
+            ns.print(stockInfo);
+        }
+    }
+    
+    if (!hasPosition) {
+        ns.print("  当前没有持仓股票");
+    }
+    
+    ns.print("══════════════════════════════════════════════════════════");
         await ns.stock.nextUpdate();
         // await ns.sleep(1000);
     }
