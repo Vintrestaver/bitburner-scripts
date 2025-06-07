@@ -9,12 +9,12 @@ export async function main(ns) {
     const stockBuyOver_Long = 0.60;     // 当预测高于此百分比时买入股票
     const stockBuyUnder_Short = 0.40;   // 当预测低于此百分比时买入股票(如果解锁卖空功能)
     const stockVolatility = 0.03;   // 允许的最大波动率(5%)
-    const minShare = 5;
+    const minShare = 1000;
     const maxSharePercent = 1;   // 最大买入百分比(100%)
     const sellThreshold_Long = 0.55;    // 当上涨概率低于此值时卖出多头    
     const sellThreshold_Short = 0.45;   // 当下跌概率高于此值时卖出空头
-    const takeProfit = 0.12;   // 止盈百分比（12%）
-    const stopLoss = -0.05;    // 止损百分比（-5%）
+    const takeProfit = 0.12;   // 止盈百分比（20%）
+    const stopLoss = -0.05;    // 止损百分比（-10%）
     const shortUnlock = false;      // 是否解锁卖空功能(如果解锁则允许卖空)
     const runScript = true; // 是否运行脚本(如果需要停止脚本，请将此值设置为false)
     const toastDuration = 15000;   // 提示消息持续时间(毫秒)
@@ -55,19 +55,11 @@ export async function main(ns) {
         let volatilityPercent = ns.stock.getVolatility(stock);  // 获取股票波动率
         let playerMoney = ns.getPlayer().money; // 获取玩家当前资金
 
-        // 凯利公式计算投资比例
-        const kellyLong = (forecast * (1 + volatilityPercent) - 1) / volatilityPercent;
-        const kellyShort = ((1 - forecast) * (1 + volatilityPercent) - 1) / volatilityPercent;
-        const maxKellyFraction = 0.2; // 最大投资比例限制
 
-
-        // Look for Long Stocks to buy (使用凯利公式优化)
+        // Look for Long Stocks to buy
         if (forecast >= stockBuyOver_Long && volatilityPercent <= stockVolatility) {
             if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minShare, "Long")) {
-                // 计算凯利比例并限制范围
-                const kellyF = Math.max(0, Math.min(kellyLong, maxKellyFraction));
-                const moneyToInvest = (playerMoney - moneyKeep) * kellyF;
-                let shares = Math.min(moneyToInvest / askPrice, maxShares);
+                let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxShares);
                 let boughtFor = ns.stock.buyStock(stock, shares);
 
                 if (boughtFor > 0) {
@@ -78,14 +70,11 @@ export async function main(ns) {
             }
         }
 
-        // Look for Short Stocks to buy (使用凯利公式优化)
+        // Look for Short Stocks to buy
         if (shortUnlock) {
             if (forecast <= stockBuyUnder_Short && volatilityPercent <= stockVolatility) {
                 if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minShare, "Short")) {
-                    // 计算凯利比例并限制范围
-                    const kellyF = Math.max(0, Math.min(kellyShort, maxKellyFraction));
-                    const moneyToInvest = (playerMoney - moneyKeep) * kellyF;
-                    let shares = Math.min(moneyToInvest / askPrice, maxSharesShort);
+                    let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxSharesShort);
                     let boughtFor = ns.stock.buyShort(stock, shares);
 
                     if (boughtFor > 0) {
@@ -126,11 +115,9 @@ export async function main(ns) {
             const profitPct = profit / (position[0] * position[1]);
 
             // 打印增强版股票信息
-            ns.print(`📊 ${stock.padEnd(5)} ${forecastBar} ${ns.formatPercent(forecast, 1).padStart(6)}`);
-            ns.print(`├─ Position: ${format(position[0])} (${ns.formatPercent(position[0] / ns.stock.getMaxShares(stock), 1)} of max)`);
-            ns.print(`├─ Avg Cost: ${format(position[1])}`);
-            ns.print(`├─ Current: ${format(ns.stock.getBidPrice(stock))}`);
-            ns.print(`└─ ${profitColor}Profit: ${format(profit)} (${ns.formatPercent(profitPct, 1)})${profit >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
+            ns.print(`${stock.padEnd(5)} Forecast ${ns.formatPercent(forecast, 1).padStart(6)} ${forecastBar}`);
+            ns.print(`       Position: ${format(position[0])} (${ns.formatPercent(position[0] / ns.stock.getMaxShares(stock), 1)} of max)`);
+            ns.print(`       ${profitColor}Profit: ${format(profit)} (${ns.formatPercent(profitPct, 1)})${profit >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
 
             // 检查是否需要卖出多头股票           
             // 检查是否需要卖出多头股票（基于预测阈值或止盈止损）
@@ -219,13 +206,12 @@ export async function main(ns) {
         }
 
         // 状态输出 (优化日志频率)
-        ns.print("╔════════════════════════════════╗");
-        ns.print(`║ 📈 股票总价值: ${format(currentWorth).padEnd(20)} ║`);
-        ns.print(`║ 💰 可用现金: ${format(playerMoney).padEnd(21)} ║`);
-        ns.print(`║ 🏦 总净资产: ${format(currentWorth + playerMoney).padEnd(20)} ║`);
-        ns.print(`║ 🎯 止盈/止损: ${ns.formatPercent(takeProfit, 1)}/${ns.formatPercent(stopLoss, 1)}`);
-        ns.print(`║ 🕒 ${new Date().toLocaleTimeString().padEnd(23)} ║`);
-        ns.print("╚════════════════════════════════╝");
+        ns.print("══════════════════════════════════");
+        ns.print(`  📈 股票总价值: ${format(currentWorth)}`);
+        ns.print(`  💰 可用现金: ${format(playerMoney)}`);
+        ns.print(`  🏦 总净资产: ${format(currentWorth + playerMoney)}`);
+        ns.print(`  🕒 ${new Date().toLocaleTimeString()}`);
+        ns.print("══════════════════════════════════");
 
         // await ns.stock.nextUpdate();
         await ns.sleep(1000)
