@@ -9,10 +9,12 @@ export async function main(ns) {
     const stockBuyOver_Long = 0.60;     // 当预测高于此百分比时买入股票
     const stockBuyUnder_Short = 0.40;   // 当预测低于此百分比时买入股票(如果解锁卖空功能)
     const stockVolatility = 0.03;   // 允许的最大波动率(5%)
-    const minShare = 1000;
+    const minShare = 5;
     const maxSharePercent = 1;   // 最大买入百分比(100%)
     const sellThreshold_Long = 0.55;    // 当上涨概率低于此值时卖出多头    
     const sellThreshold_Short = 0.45;   // 当下跌概率高于此值时卖出空头
+    const takeProfit = 0.12;   // 止盈百分比（12%）
+    const stopLoss = -0.05;    // 止损百分比（-5%）
     const shortUnlock = false;      // 是否解锁卖空功能(如果解锁则允许卖空)
     const runScript = true; // 是否运行脚本(如果需要停止脚本，请将此值设置为false)
     const toastDuration = 15000;   // 提示消息持续时间(毫秒)
@@ -53,11 +55,19 @@ export async function main(ns) {
         let volatilityPercent = ns.stock.getVolatility(stock);  // 获取股票波动率
         let playerMoney = ns.getPlayer().money; // 获取玩家当前资金
 
+        // 凯利公式计算投资比例
+        const kellyLong = (forecast * (1 + volatilityPercent) - 1) / volatilityPercent;
+        const kellyShort = ((1 - forecast) * (1 + volatilityPercent) - 1) / volatilityPercent;
+        const maxKellyFraction = 0.2; // 最大投资比例限制
 
-        // Look for Long Stocks to buy
+
+        // Look for Long Stocks to buy (使用凯利公式优化)
         if (forecast >= stockBuyOver_Long && volatilityPercent <= stockVolatility) {
             if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minShare, "Long")) {
-                let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxShares);
+                // 计算凯利比例并限制范围
+                const kellyF = Math.max(0, Math.min(kellyLong, maxKellyFraction));
+                const moneyToInvest = (playerMoney - moneyKeep) * kellyF;
+                let shares = Math.min(moneyToInvest / askPrice, maxShares);
                 let boughtFor = ns.stock.buyStock(stock, shares);
 
                 if (boughtFor > 0) {
@@ -68,11 +78,14 @@ export async function main(ns) {
             }
         }
 
-        // Look for Short Stocks to buy
+        // Look for Short Stocks to buy (使用凯利公式优化)
         if (shortUnlock) {
             if (forecast <= stockBuyUnder_Short && volatilityPercent <= stockVolatility) {
                 if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minShare, "Short")) {
-                    let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxSharesShort);
+                    // 计算凯利比例并限制范围
+                    const kellyF = Math.max(0, Math.min(kellyShort, maxKellyFraction));
+                    const moneyToInvest = (playerMoney - moneyKeep) * kellyF;
+                    let shares = Math.min(moneyToInvest / askPrice, maxSharesShort);
                     let boughtFor = ns.stock.buyShort(stock, shares);
 
                     if (boughtFor > 0) {
@@ -118,10 +131,15 @@ export async function main(ns) {
             ns.print(`       ${profitColor}Profit: ${format(profit)} (${ns.formatPercent(profitPct, 1)})${profit >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
 
             // 检查是否需要卖出多头股票           
-            if (forecast < sellThreshold_Long) {
-                let soldFor = ns.stock.sellStock(stock, position[0]);
-                let message = 'Sold ' + position[0] + ' Long shares of ' + stock + ' for ' + ns.formatNumber(soldFor, 2);
+            // 检查是否需要卖出多头股票（基于预测阈值或止盈止损）
+            if (forecast < sellThreshold_Long || profitPct >= takeProfit || profitPct <= stopLoss) {
+                ns.stock.sellStock(stock, position[0]);
+                let reason = "";
+                if (profitPct >= takeProfit) reason = "止盈";
+                else if (profitPct <= stopLoss) reason = "止损";
+                else reason = "预测值低于阈值";
 
+                let message = `以${reason}卖出 ${position[0]} 股 ${stock}，获利 ${format(profit)} (${ns.formatPercent(profitPct, 1)})`;
                 ns.toast(message, 'success', toastDuration);
             }
         }
@@ -131,10 +149,22 @@ export async function main(ns) {
                 ns.print(stock + ' 4S Forecast -> ' + forecast.toFixed(2));
 
                 // 检查是否需要卖出空头股票 
-                if (forecast > sellThreshold_Short) {
-                    let soldFor = ns.stock.sellShort(stock, position[2]);
-                    let message = 'Sold ' + stock + ' Short shares of ' + stock + ' for ' + ns.formatNumber(soldFor, 2);
+                // 计算空头利润
+                const profitShort = position[2] * (position[3] - ns.stock.getBidPrice(stock)) - 200000;
+                const profitShortPct = profitShort / (position[2] * position[3]);
 
+                ns.print(`       Short Position: ${format(position[2])}`);
+                ns.print(`       ${profitColor}Short Profit: ${format(profitShort)} (${ns.formatPercent(profitShortPct, 1)})${profitShort >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
+
+                // 检查是否需要卖出空头股票（基于预测阈值或止盈止损）
+                if (forecast > sellThreshold_Short || profitShortPct >= takeProfit || profitShortPct <= stopLoss) {
+                    ns.stock.sellShort(stock, position[2]);
+                    let reason = "";
+                    if (profitShortPct >= takeProfit) reason = "止盈";
+                    else if (profitShortPct <= stopLoss) reason = "止损";
+                    else reason = "预测值高于阈值";
+
+                    let message = `以${reason}卖出 ${position[2]} 股空头 ${stock}，获利 ${format(profitShort)} (${ns.formatPercent(profitShortPct, 1)})`;
                     ns.toast(message, 'success', toastDuration);
                 }
             }
