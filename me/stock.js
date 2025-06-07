@@ -5,82 +5,182 @@ export async function main(ns) {
     ns.ui.openTail();
 
     // 全局变量
-    const moneyKeep = Number(ns.read("reserve.txt"));   // 保留的安全资金(默认为reserve.txt中的值)
+    const moneyKeep = Number(ns.read("reserve.txt"));   // 保留的安全资金
     const stockBuyOver_Long = 0.60;     // 当预测高于此百分比时买入股票
     const stockBuyUnder_Short = 0.40;   // 当预测低于此百分比时买入股票(如果解锁卖空功能)
-    const stockVolatility = 0.03;   // 允许的最大波动率(5%)
+    const stockVolatility = 0.03;       // 允许的最大波动率(3%)
     const minShare = 1000;
-    const maxSharePercent = 1;   // 最大买入百分比(100%)
-    const sellThreshold_Long = 0.55;    // 当上涨概率低于此值时卖出多头    
+    const maxSharePercent = 1;          // 最大买入百分比(100%)
+    const sellThreshold_Long = 0.55;    // 当上涨概率低于此值时卖出多头
     const sellThreshold_Short = 0.45;   // 当下跌概率高于此值时卖出空头
-    const takeProfit = 0.12;   // 止盈百分比（20%）
-    const stopLoss = -0.05;    // 止损百分比（-10%）
-    const shortUnlock = false;      // 是否解锁卖空功能(如果解锁则允许卖空)
-    const runScript = true; // 是否运行脚本(如果需要停止脚本，请将此值设置为false)
-    const toastDuration = 15000;   // 提示消息持续时间(毫秒)
+    const takeProfit = 0.12;            // 止盈百分比（12%）
+    const stopLoss = -0.05;             // 止损百分比（-5%）
+    const shortUnlock = false;          // 是否解锁卖空功能
+    const runScript = true;             // 是否运行脚本
+    const toastDuration = 15000;        // 提示消息持续时间(毫秒)
+    
+    // MACD和RSI参数
+    const MACD_SHORT_PERIOD = 12;       // 短期EMA周期
+    const MACD_LONG_PERIOD = 26;        // 长期EMA周期
+    const MACD_SIGNAL_PERIOD = 9;       // 信号线周期
+    const RSI_PERIOD = 14;              // RSI计算周期
+    const RSI_OVERSOLD = 30;            // RSI超卖阈值
+    const RSI_OVERBOUGHT = 70;          // RSI超买阈值
+    const RSI_MID = 50;                 // RSI中轴
 
     // 函数定义
-    // 对能处理的数值使用nFormat进行格式化
-    // 主要处理常规数字的显示格式
     function format(number) {
-        if (Math.abs(number) < 1e-6) {
-            number = 0;
-        }
-        const absNum = Math.abs(number)
-        const answer = number < 0
-            ? `\x1b[31m-$${ns.formatNumber(absNum, 2)}\x1b[0m`
+        if (Math.abs(number) < 1e-6) number = 0;
+        const absNum = Math.abs(number);
+        return number < 0 
+            ? `\x1b[31m-$${ns.formatNumber(absNum, 2)}\x1b[0m` 
             : ` $${ns.formatNumber(absNum, 2)}`;
+    }
 
-        if (answer === "NaN") {
-            return `${number}`;
+    // 计算指数移动平均线(EMA)
+    function calculateEMA(prices, period) {
+        if (prices.length < period) return null;
+        const multiplier = 2 / (period + 1);
+        let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+        
+        for (let i = period; i < prices.length; i++) {
+            ema = (prices[i] - ema) * multiplier + ema;
         }
+        return ema;
+    }
 
-        return answer;
+    // 计算MACD指标
+    function calculateMACD(prices) {
+        if (prices.length < MACD_LONG_PERIOD) return null;
+        
+        const shortEMA = calculateEMA(prices, MACD_SHORT_PERIOD);
+        const longEMA = calculateEMA(prices, MACD_LONG_PERIOD);
+        const macdLine = shortEMA - longEMA;
+        
+        // 计算信号线
+        const macdValues = [];
+        for (let i = MACD_LONG_PERIOD; i < prices.length; i++) {
+            const slice = prices.slice(i - MACD_LONG_PERIOD, i);
+            const sEMA = calculateEMA(slice, MACD_SHORT_PERIOD);
+            const lEMA = calculateEMA(slice, MACD_LONG_PERIOD);
+            macdValues.push(sEMA - lEMA);
+        }
+        
+        const signalLine = macdValues.length >= MACD_SIGNAL_PERIOD 
+            ? calculateEMA(macdValues, MACD_SIGNAL_PERIOD) 
+            : 0;
+        
+        return {
+            macd: macdLine,
+            signal: signalLine,
+            histogram: macdLine - signalLine
+        };
+    }
+
+    // 计算RSI指标
+    function calculateRSI(prices, period) {
+        if (prices.length < period + 1) return 50;
+        
+        let gains = 0;
+        let losses = 0;
+        
+        for (let i = 1; i <= period; i++) {
+            const diff = prices[i] - prices[i-1];
+            if (diff >= 0) gains += diff;
+            else losses -= diff;
+        }
+        
+        const avgGain = gains / period;
+        const avgLoss = losses / period;
+        
+        if (avgLoss === 0) return 100;
+        const rs = avgGain / avgLoss;
+        return 100 - (100 / (1 + rs));
+    }
+
+    // 检测背离
+    function checkDivergence(priceHistory, indicatorHistory, type = 'top') {
+        if (priceHistory.length < 2 || indicatorHistory.length < 2) return false;
+        
+        const lastPrice = priceHistory[priceHistory.length - 1];
+        const prevPrice = priceHistory[priceHistory.length - 2];
+        const lastIndicator = indicatorHistory[indicatorHistory.length - 1];
+        const prevIndicator = indicatorHistory[indicatorHistory.length - 2];
+        
+        if (type === 'top') {
+            return lastPrice > prevPrice && lastIndicator < prevIndicator;
+        } else {
+            return lastPrice < prevPrice && lastIndicator > prevIndicator;
+        }
     }
 
     /**
      * 买入头寸函数
-     * @param {string} stock - 股票代码
-     * 功能: 根据预测和波动率决定买入多头或空头
-     * 条件1: 预测值高于阈值且波动率低于阈值时买入多头
-     * 条件2: 预测值低于阈值且波动率低于阈值时买入空头(如果解锁)
-     * 注意: 会保留安全资金(moneyKeep)
      */
-    function buyPositions(stock) {
-        let position = ns.stock.getPosition(stock); // 获取当前头寸
-        let maxShares = (ns.stock.getMaxShares(stock) * maxSharePercent) - position[0]; // 计算可买入的最大多头股数
-        let maxSharesShort = (ns.stock.getMaxShares(stock) * maxSharePercent) - position[2];    // 计算可买入的最大空头股数
-        let askPrice = ns.stock.getAskPrice(stock); // 获取当前卖出价格
-        let forecast = ns.stock.getForecast(stock); // 获取股票预测值
-        let volatilityPercent = ns.stock.getVolatility(stock);  // 获取股票波动率
-        let playerMoney = ns.getPlayer().money; // 获取玩家当前资金
-
-
-        // Look for Long Stocks to buy
-        if (forecast >= stockBuyOver_Long && volatilityPercent <= stockVolatility) {
+    function buyPositions(stock, priceHistory, macdHistory, rsiHistory) {
+        const position = ns.stock.getPosition(stock);
+        const maxShares = (ns.stock.getMaxShares(stock) * maxSharePercent) - position[0];
+        const maxSharesShort = (ns.stock.getMaxShares(stock) * maxSharePercent) - position[2];
+        const askPrice = ns.stock.getAskPrice(stock);
+        const forecast = ns.stock.getForecast(stock);
+        const volatilityPercent = ns.stock.getVolatility(stock);
+        const playerMoney = ns.getPlayer().money;
+        
+        // 计算技术指标
+        const macdData = calculateMACD(priceHistory);
+        const rsi = calculateRSI(priceHistory, RSI_PERIOD);
+        const prevRsi = rsiHistory.length > 0 ? rsiHistory[rsiHistory.length - 1] : 50;
+        
+        // MACD金叉检测
+        const macdGoldenCross = macdData && macdHistory.length > 0 
+            ? (macdData.macd > macdData.signal) && (macdHistory[macdHistory.length - 1].macd <= macdHistory[macdHistory.length - 1].signal)
+            : false;
+        
+        // RSI从超卖区回升
+        const rsiRecovery = (prevRsi < RSI_OVERSOLD) && (rsi > RSI_MID);
+        
+        // 趋势与动量双重验证
+        const longCondition = (forecast >= stockBuyOver_Long && volatilityPercent <= stockVolatility) || 
+                             (macdGoldenCross && rsiRecovery);
+        
+        // 多头买入条件
+        if (longCondition) {
             if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minShare, "Long")) {
-                let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxShares);
-                let boughtFor = ns.stock.buyStock(stock, shares);
-
+                const shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxShares);
+                const boughtFor = ns.stock.buyStock(stock, shares);
+                
                 if (boughtFor > 0) {
-                    let message = 'Bought ' + Math.round(shares) + ' Long shares of ' + stock + ' for ' + format(boughtFor);
-
-                    ns.toast(message, 'success', toastDuration);
+                    ns.toast(`买入 ${Math.round(shares)} 股 ${stock}，金额 ${format(boughtFor)}`, 'success', toastDuration);
                 }
             }
         }
-
-        // Look for Short Stocks to buy
+        
+        // 空头买入条件（如果解锁）
         if (shortUnlock) {
-            if (forecast <= stockBuyUnder_Short && volatilityPercent <= stockVolatility) {
+            // MACD死叉检测
+            const macdDeathCross = macdData && macdHistory.length > 0 
+                ? (macdData.macd < macdData.signal) && (macdHistory[macdHistory.length - 1].macd >= macdHistory[macdHistory.length - 1].signal)
+                : false;
+            
+            // RSI从超买区回落
+            const rsiDecline = (prevRsi > RSI_OVERBOUGHT) && (rsi < RSI_OVERBOUGHT);
+            
+            // 底背离检测
+            const bottomDivergence = checkDivergence(priceHistory, macdHistory, 'bottom') || 
+                                   checkDivergence(priceHistory, rsiHistory, 'bottom');
+            
+            // 趋势与动量双重验证
+            const shortCondition = (forecast <= stockBuyUnder_Short && volatilityPercent <= stockVolatility) || 
+                                 (macdDeathCross && rsiDecline) ||
+                                 bottomDivergence;
+            
+            if (shortCondition) {
                 if (playerMoney - moneyKeep > ns.stock.getPurchaseCost(stock, minShare, "Short")) {
-                    let shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxSharesShort);
-                    let boughtFor = ns.stock.buyShort(stock, shares);
-
+                    const shares = Math.min((playerMoney - moneyKeep - 100000) / askPrice, maxSharesShort);
+                    const boughtFor = ns.stock.buyShort(stock, shares);
+                    
                     if (boughtFor > 0) {
-                        let message = 'Bought ' + Math.round(shares) + ' Short shares of ' + stock + ' for ' + format(boughtFor);
-
-                        ns.toast(message, 'success', toastDuration);
+                        ns.toast(`卖空 ${Math.round(shares)} 股 ${stock}，金额 ${format(boughtFor)}`, 'success', toastDuration);
                     }
                 }
             }
@@ -89,131 +189,176 @@ export async function main(ns) {
 
     /**
      * 卖出头寸函数
-     * @param {string} stock - 股票代码
-     * 功能: 检查并卖出不符合条件的头寸
-     * 卖出多头条件: 预测值低于sellThreshold_Long
-     * 卖出空头条件: 预测值高于sellThreshold_Short(如果解锁)
-     * 附加功能: 打印股票预测信息和利润数据
      */
-    function sellIfOutsideThreshdold(stock) {
-        let position = ns.stock.getPosition(stock); // 获取当前头寸
-        let forecast = ns.stock.getForecast(stock); // 获取股票预测值
-
+    function sellIfOutsideThreshold(stock, priceHistory, macdHistory, rsiHistory) {
+        const position = ns.stock.getPosition(stock);
+        const bidPrice = ns.stock.getBidPrice(stock);
+        const forecast = ns.stock.getForecast(stock);
+        
         if (position[0] > 0) {
-            // 预测可视化 (0-100% 条形图)
-            const forecastBarLength = 20;
-            const forecastBarPos = Math.floor(forecast * forecastBarLength);
-            const forecastBar = '[' +
-                '='.repeat(forecastBarPos) +
-                '|' +
-                ' '.repeat(forecastBarLength - forecastBarPos - 1) +
-                ']';
-
-            // 利润计算与颜色标记
-            const profit = position[0] * (ns.stock.getBidPrice(stock) - position[1]) - 200000;
-            const profitColor = profit >= 0 ? '\x1b[32m' : '\x1b[31m';
+            // 计算利润
+            const profit = position[0] * (bidPrice - position[1]) - 200000;
             const profitPct = profit / (position[0] * position[1]);
-
-            // 打印增强版股票信息
-            ns.print(`${stock.padEnd(5)} Forecast ${ns.formatPercent(forecast, 1).padStart(6)} ${forecastBar}`);
-            ns.print(`       Position: ${format(position[0])} (${ns.formatPercent(position[0] / ns.stock.getMaxShares(stock), 1)} of max)`);
-            ns.print(`       ${profitColor}Profit: ${format(profit)} (${ns.formatPercent(profitPct, 1)})${profit >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
-
-            // 检查是否需要卖出多头股票           
-            // 检查是否需要卖出多头股票（基于预测阈值或止盈止损）
-            if (forecast < sellThreshold_Long || profitPct >= takeProfit || profitPct <= stopLoss) {
+            
+            // 计算技术指标
+            const macdData = calculateMACD(priceHistory);
+            const rsi = calculateRSI(priceHistory, RSI_PERIOD);
+            const prevMacd = macdHistory.length > 0 ? macdHistory[macdHistory.length - 1] : null;
+            const prevRsi = rsiHistory.length > 0 ? rsiHistory[rsiHistory.length - 1] : 50;
+            
+            // MACD死叉检测
+            const macdDeathCross = macdData && prevMacd 
+                ? (macdData.macd < macdData.signal) && (prevMacd.macd >= prevMacd.signal)
+                : false;
+            
+            // RSI从超买区回落
+            const rsiDecline = (prevRsi > RSI_OVERBOUGHT) && (rsi < RSI_OVERBOUGHT);
+            
+            // 顶背离检测
+            const topDivergence = checkDivergence(priceHistory, macdHistory, 'top') || 
+                                 checkDivergence(priceHistory, rsiHistory, 'top');
+            
+            // 卖出条件：技术指标信号或止盈止损
+            const sellCondition = forecast < sellThreshold_Long || 
+                                 profitPct >= takeProfit || 
+                                 profitPct <= stopLoss ||
+                                 macdDeathCross || 
+                                 rsiDecline ||
+                                 topDivergence;
+            
+            if (sellCondition) {
                 ns.stock.sellStock(stock, position[0]);
                 let reason = "";
                 if (profitPct >= takeProfit) reason = "止盈";
                 else if (profitPct <= stopLoss) reason = "止损";
-                else reason = "预测值低于阈值";
-
-                let message = `以${reason}卖出 ${position[0]} 股 ${stock}，获利 ${format(profit)} (${ns.formatPercent(profitPct, 1)})`;
-                ns.toast(message, 'success', toastDuration);
+                else if (macdDeathCross) reason = "MACD死叉";
+                else if (rsiDecline) reason = "RSI回落";
+                else if (topDivergence) reason = "顶背离";
+                
+                ns.toast(`以${reason}卖出 ${position[0]} 股 ${stock}，获利 ${format(profit)} (${ns.formatPercent(profitPct, 1)})`, 'success', toastDuration);
             }
         }
-
-        if (shortUnlock) {
-            if (position[2] > 0) {
-                ns.print(stock + ' 4S Forecast -> ' + forecast.toFixed(2));
-
-                // 检查是否需要卖出空头股票 
-                // 计算空头利润
-                const profitShort = position[2] * (position[3] - ns.stock.getBidPrice(stock)) - 200000;
-                const profitShortPct = profitShort / (position[2] * position[3]);
-
-                ns.print(`       Short Position: ${format(position[2])}`);
-                ns.print(`       ${profitColor}Short Profit: ${format(profitShort)} (${ns.formatPercent(profitShortPct, 1)})${profitShort >= 0 ? '\x1b[0m' : '\x1b[0m'}`);
-
-                // 检查是否需要卖出空头股票（基于预测阈值或止盈止损）
-                if (forecast > sellThreshold_Short || profitShortPct >= takeProfit || profitShortPct <= stopLoss) {
-                    ns.stock.sellShort(stock, position[2]);
-                    let reason = "";
-                    if (profitShortPct >= takeProfit) reason = "止盈";
-                    else if (profitShortPct <= stopLoss) reason = "止损";
-                    else reason = "预测值高于阈值";
-
-                    let message = `以${reason}卖出 ${position[2]} 股空头 ${stock}，获利 ${format(profitShort)} (${ns.formatPercent(profitShortPct, 1)})`;
-                    ns.toast(message, 'success', toastDuration);
-                }
+        
+        if (shortUnlock && position[2] > 0) {
+            // 计算利润
+            const profit = position[2] * (position[3] - bidPrice) - 200000;
+            const profitPct = profit / (position[2] * position[3]);
+            
+            // 计算技术指标
+            const macdData = calculateMACD(priceHistory);
+            const rsi = calculateRSI(priceHistory, RSI_PERIOD);
+            const prevMacd = macdHistory.length > 0 ? macdHistory[macdHistory.length - 1] : null;
+            const prevRsi = rsiHistory.length > 0 ? rsiHistory[rsiHistory.length - 1] : 50;
+            
+            // MACD金叉检测
+            const macdGoldenCross = macdData && prevMacd 
+                ? (macdData.macd > macdData.signal) && (prevMacd.macd <= prevMacd.signal)
+                : false;
+            
+            // RSI从超卖区回升
+            const rsiRecovery = (prevRsi < RSI_OVERSOLD) && (rsi > RSI_OVERSOLD);
+            
+            // 底背离检测
+            const bottomDivergence = checkDivergence(priceHistory, macdHistory, 'bottom') || 
+                                   checkDivergence(priceHistory, rsiHistory, 'bottom');
+            
+            // 卖出条件：技术指标信号或止盈止损
+            const sellCondition = forecast > sellThreshold_Short || 
+                                 profitPct >= takeProfit || 
+                                 profitPct <= stopLoss ||
+                                 macdGoldenCross || 
+                                 rsiRecovery ||
+                                 bottomDivergence;
+            
+            if (sellCondition) {
+                ns.stock.sellShort(stock, position[2]);
+                let reason = "";
+                if (profitPct >= takeProfit) reason = "止盈";
+                else if (profitPct <= stopLoss) reason = "止损";
+                else if (macdGoldenCross) reason = "MACD金叉";
+                else if (rsiRecovery) reason = "RSI回升";
+                else if (bottomDivergence) reason = "底背离";
+                
+                ns.toast(`以${reason}平仓空头 ${position[2]} 股 ${stock}，获利 ${format(profit)} (${ns.formatPercent(profitPct, 1)})`, 'success', toastDuration);
             }
         }
     }
 
-    // 缓存股票列表 (性能优化)
+    // 缓存股票列表
     const allStocks = ns.stock.getSymbols();
+    
+    // 历史数据存储
+    const priceHistory = {};
+    const macdHistory = {};
+    const rsiHistory = {};
+    
+    for (const stock of allStocks) {
+        priceHistory[stock] = [];
+        macdHistory[stock] = [];
+        rsiHistory[stock] = [];
+    }
 
     // 主循环
     while (runScript) {
         ns.clearLog();
-        // 获取玩家资金 (单次调用优化)
         const playerMoney = ns.getPlayer().money;
         let currentWorth = 0;
         ns.print("---------------------------------------");
-
-        // 批量获取股票数据 (减少API调用)
-        const stockData = allStocks.map(stock => {
-            const position = ns.stock.getPosition(stock);
-            const bidPrice = ns.stock.getBidPrice(stock);
-            return {
-                symbol: stock,
-                position,
-                bidPrice,
-                forecast: ns.stock.getForecast(stock)
-            };
-        });
-
+        
+        // 更新历史数据
+        for (const stock of allStocks) {
+            const price = ns.stock.getBidPrice(stock);
+            priceHistory[stock].push(price);
+            if (priceHistory[stock].length > 50) priceHistory[stock].shift();
+        }
+        
         // 处理卖出逻辑
-        for (const { symbol, position } of stockData) {
+        for (const stock of allStocks) {
+            const position = ns.stock.getPosition(stock);
             if (position[0] > 0 || position[2] > 0) {
-                sellIfOutsideThreshdold(symbol);
+                sellIfOutsideThreshold(stock, priceHistory[stock], macdHistory[stock], rsiHistory[stock]);
             }
         }
-
+        
         // 处理买入逻辑
-        for (const { symbol } of stockData) {
-            buyPositions(symbol);
+        for (const stock of allStocks) {
+            buyPositions(stock, priceHistory[stock], macdHistory[stock], rsiHistory[stock]);
         }
-
+        
+        // 更新MACD和RSI历史
+        for (const stock of allStocks) {
+            if (priceHistory[stock].length > MACD_LONG_PERIOD) {
+                const macdData = calculateMACD(priceHistory[stock]);
+                if (macdData) {
+                    macdHistory[stock].push(macdData);
+                    if (macdHistory[stock].length > 10) macdHistory[stock].shift();
+                }
+                
+                const rsi = calculateRSI(priceHistory[stock], RSI_PERIOD);
+                rsiHistory[stock].push(rsi);
+                if (rsiHistory[stock].length > 10) rsiHistory[stock].shift();
+            }
+        }
+        
         // 计算当前持仓价值
-        for (const { position, bidPrice } of stockData) {
+        for (const stock of allStocks) {
+            const position = ns.stock.getPosition(stock);
             if (position[0] > 0 || position[2] > 0) {
                 const [longShares, longPrice, shortShares, shortPrice] = position;
-                const profit = longShares * (bidPrice - longPrice) - 200000;
-                const profitShort = shortShares * Math.abs(bidPrice - shortPrice) - 200000;
+                const profit = longShares * (ns.stock.getBidPrice(stock) - longPrice) - 200000;
+                const profitShort = shortShares * (shortPrice - ns.stock.getBidPrice(stock)) - 200000;
                 currentWorth += profit + profitShort + (longShares * longPrice) + (shortShares * shortPrice);
             }
         }
-
-        // 状态输出 (优化日志频率)
+        
+        // 状态输出
         ns.print("══════════════════════════════════");
         ns.print(`  📈 股票总价值: ${format(currentWorth)}`);
         ns.print(`  💰 可用现金: ${format(playerMoney)}`);
         ns.print(`  🏦 总净资产: ${format(currentWorth + playerMoney)}`);
         ns.print(`  🕒 ${new Date().toLocaleTimeString()}`);
         ns.print("══════════════════════════════════");
-
-        // await ns.stock.nextUpdate();
-        await ns.sleep(1000)
+        
+        await ns.sleep(1000);
     }
 }
