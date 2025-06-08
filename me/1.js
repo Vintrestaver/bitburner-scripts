@@ -208,6 +208,40 @@ export async function main(ns) {
                     // 如果是 4S 数据之前，不要购买任何最近反转的股票，或者其概率太接近 0.5
                     if (pre4s && (stk.lastInversion < minTickHistory || Math.abs(stk.prob - 0.5) < pre4sBuyThresholdProbability)) continue;
 
+                    // 根据ADX值选择技术指标进行决策
+                    let useIndicator = false;
+                    let indicatorReason = "";
+
+                    // 强趋势市场（ADX>40）使用MACD指标
+                    if (stk.adx > 0.4) {
+                        if (stk.macd > 0) {
+                            useIndicator = true;
+                            indicatorReason = `ADX:${(stk.adx * 100).toFixed(1)} (强趋势), MACD:${stk.macd.toFixed(4)} > 0`;
+                        }
+                    }
+                    // 震荡市场（ADX<20）使用RSI指标
+                    else if (stk.adx < 0.2) {
+                        if (stk.rsi < 30) {
+                            useIndicator = true;
+                            indicatorReason = `ADX:${(stk.adx * 100).toFixed(1)} (震荡), RSI:${stk.rsi.toFixed(1)} < 30`;
+                        }
+                    }
+                    // 过渡阶段（ADX在20-40之间）使用MACD+RSI组合
+                    else {
+                        if (stk.macd > 0 && stk.rsi < 40) {
+                            useIndicator = true;
+                            indicatorReason = `ADX:${(stk.adx * 100).toFixed(1)} (过渡), MACD:${stk.macd.toFixed(4)} > 0 且 RSI:${stk.rsi.toFixed(1)} < 40`;
+                        }
+                    }
+
+                    // 如果指标不满足条件，跳过购买
+                    if (!useIndicator) {
+                        if (stk.owned() && noisy) {
+                            log(ns, `跳过 ${stk.sym} - 指标不满足条件: ${indicatorReason || '无'}`, false);
+                        }
+                        continue;
+                    }
+
                     // 强制分散投资：不要将超过 x% 的资产作为单一股票持有（随着资产增加，这自然不再成为限制）
                     // 将我们的预算/当前头寸价值乘以 stk.spread_pct 因子，以避免由于买入/卖出价差使头寸在购买后显得更加分散而重复微购股票
                     let budget = Math.min(cash, maxHoldings * (diversification + stk.spread_pct) - stk.positionValue() * (1.01 + stk.spread_pct))
@@ -223,12 +257,12 @@ export async function main(ns) {
                     if (estEndOfCycleValue <= 2 * commission)
                         log(ns, (owned ? '' : `我们目前拥有 ${formatNumberShort(stk.ownedShares(), 3, 1)} 股 ${stk.sym}，价值 ${formatMoney(stk.positionValue())} ` +
                             `(${(100 * stk.positionValue() / maxHoldings).toFixed(1)}% 的资产，由 --diversification 限制为 ${(diversification * 100).toFixed(1)}%)。\n`) +
-                            `尽管有吸引力的预期回报 ${formatBP(stk.absReturn())}，${owned ? '更多 ' : ''}${stk.sym} 未被购买。 ` +
+                            `尽管有吸引力的预期回报 ${formatBP(stk.absReturn())} 和指标条件 (${indicatorReason})，${owned ? '更多 ' : ''}${stk.sym} 未被购买。 ` +
                             `\n预算：${formatMoney(budget)} 只能购买 ${numShares.toLocaleString('en')} ${owned ? '更多 ' : ''}股 @ ${formatMoney(purchasePrice)}。 ` +
                             `\n鉴于市场周期剩余 ${marketCycleLength - estTick} ticks，减去 ${stk.timeToCoverTheSpread().toFixed(1)} ticks 以覆盖价差（${(stk.spread_pct * 100).toFixed(2)}%），` +
                             `剩余的 ${ticksBeforeCycleEnd.toFixed(1)} ticks 只会产生 ${formatMoney(estEndOfCycleValue)}，这低于 2 倍佣金（${formatMoney(2 * commission, 3)}）`);
                     else
-                        cash -= await doBuy(ns, stk, numShares);
+                        cash -= await doBuy(ns, stk, numShares, indicatorReason);
                 }
             }
         } catch (err) {
@@ -288,8 +322,12 @@ async function initAllStocks(ns) {
         // 我们不应在市场周期的这么多 ticks 内购买此股票，否则我们可能因概率反转而被迫出售，并因价差而亏损
         blackoutWindow: function () { return Math.ceil(this.timeToCoverTheSpread()); },
         // 4S 数据之前用于预测的属性
-        priceHistory: [],
+        priceHistory: [], // 现在存储对象数组：{high, low, close}
         lastInversion: 0,
+        // 技术指标
+        adx: 0.5, // 默认中性值
+        macd: 0,
+        rsi: 50, // 默认中性值
     }));
 }
 
@@ -321,8 +359,8 @@ async function refresh(ns, has4s, allStocks, myStocks) {
     myStocks.length = 0;
     for (const stk of allStocks) {
         const sym = stk.sym;
-        stk.ask_price = dictAskPrices[sym]; // 如果我们购买股票，我们将支付的金额（高于“价格”）
-        stk.bid_price = dictBidPrices[sym]; // 如果我们出售股票，我们将收到的金额（低于“价格”）
+        stk.ask_price = dictAskPrices[sym]; // 如果我们购买股票，我们将支付的金额（高于"价格"）
+        stk.bid_price = dictBidPrices[sym]; // 如果我们出售股票，我们将收到的金额（低于"价格"）
         stk.spread = stk.ask_price - stk.bid_price;
         stk.spread_pct = stk.spread / stk.ask_price; // 仅因购买股票而损失的价值百分比
         stk.price = (stk.ask_price + stk.bid_price) / 2; // = ns.stock.getPrice(sym);
@@ -338,8 +376,25 @@ async function refresh(ns, has4s, allStocks, myStocks) {
         stk.boughtPriceShort = mock ? (stk.boughtPrice_short || 0) : stk.position[3];
         holdings += stk.positionValue();
         if (stk.owned()) myStocks.push(stk); else stk.ticksHeld = 0;
-        if (ticked) // 增加 ticksHeld，或者如果我们没有持有此股票的头寸或在上一个 tick 反转了我们的头寸，则重置它。
+        if (ticked) { // 增加 ticksHeld，或者如果我们没有持有此股票的头寸或在上一个 tick 反转了我们的头寸，则重置它。
             stk.ticksHeld = !stk.owned() || (priorLong > 0 && stk.sharesLong == 0) || (priorShort > 0 && stk.sharesShort == 0) ? 0 : 1 + (stk.ticksHeld || 0);
+            // 添加当前价格数据到历史记录（高、低、收盘）
+            stk.priceHistory.unshift({
+                high: stk.ask_price, // 最高价 = 卖出价
+                low: stk.bid_price,  // 最低价 = 买入价
+                close: stk.price     // 收盘价 = 中间价
+            });
+            // 限制历史记录长度
+            if (stk.priceHistory.length > maxTickHistory) {
+                stk.priceHistory.pop();
+            }
+            // 计算技术指标
+            if (stk.priceHistory.length >= 26) {
+                stk.adx = computeADX(stk.priceHistory, 14);
+                stk.macd = computeMACD(stk.priceHistory);
+                stk.rsi = computeRSI(stk.priceHistory, 14);
+            }
+        }
     }
     if (ticked) await updateForecast(ns, allStocks, has4s); // 仅在市场 tick 时需要以下逻辑
     return holdings;
@@ -359,15 +414,18 @@ async function updateForecast(ns, allStocks, has4s) {
     const inversionsDetected = []; // 跟踪概率已反转的个别股票（每个“周期”有 45% 的概率发生）
     detectedCycleTick = (detectedCycleTick + 1) % marketCycleLength; // 跟踪股票市场周期（每 75 个 ticks 发生一次）
     for (const stk of allStocks) {
-        stk.priceHistory.unshift(stk.price);
-        if (stk.priceHistory.length > maxTickHistory) // 限制滚动窗口大小
-            stk.priceHistory.splice(maxTickHistory, 1);
         // 波动性很容易 - 单个 tick 中观察到的最大百分比变动
-        if (!has4s) stk.vol = stk.priceHistory.reduce((max, price, idx) => Math.max(max, idx == 0 ? 0 : Math.abs(stk.priceHistory[idx - 1] - price) / price), 0);
+        if (!has4s) {
+            // 使用收盘价计算波动性
+            const closePrices = stk.priceHistory.map(p => p.close);
+            stk.vol = closePrices.reduce((max, price, idx) =>
+                idx == 0 ? 0 : Math.max(max, Math.abs(closePrices[idx - 1] - price) / price), 0);
+        }
         // 我们希望股票具有最佳预期回报，在长窗口内平均以提高精度，但游戏会偶尔反转概率
         // （每 75 次更新有 45% 的概率），因此我们还计算一个短期预测窗口，以便尽早检测反转，以便我们可以放弃我们的头寸。
-        stk.nearTermForecast = forecast(stk.priceHistory.slice(0, nearTermForecastWindowLength));
-        let preNearTermWindowProb = forecast(stk.priceHistory.slice(nearTermForecastWindowLength, nearTermForecastWindowLength + marketCycleLength)); // 用于检测潜在反转事件之前的概率。
+        const closePrices = stk.priceHistory.map(p => p.close);
+        stk.nearTermForecast = forecast(closePrices.slice(0, nearTermForecastWindowLength));
+        let preNearTermWindowProb = forecast(closePrices.slice(nearTermForecastWindowLength, nearTermForecastWindowLength + marketCycleLength)); // 用于检测潜在反转事件之前的概率。
         // 检测此股票的概率是否最近发生了反转（即 prob => 1 - prob）
         stk.possibleInversionDetected = has4s ? detectInversion(stk.prob, stk.lastTickProbability || stk.prob) : detectInversion(preNearTermWindowProb, stk.nearTermForecast);
         stk.lastTickProbability = stk.prob;
@@ -640,4 +698,135 @@ function initializeHud() {
     // 将我们的元素插入到金钱之后
     customElements.parentElement.insertBefore(stockValueTracker, customElements.parentElement.childNodes[2]);
     return htmlDisplay;
+}
+
+// 技术指标计算函数
+function computeADX(prices, period = 14) {
+    if (prices.length < period * 2) return 0.5; // 中性值
+
+    // 计算真实波幅(TR)、+DM和-DM
+    let trs = [];
+    let plusDMs = [];
+    let minusDMs = [];
+
+    for (let i = 1; i < prices.length; i++) {
+        const high = prices[i].high;
+        const low = prices[i].low;
+        const prevClose = prices[i - 1].close;
+
+        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        trs.push(tr);
+
+        const upMove = high - prices[i - 1].high;
+        const downMove = prices[i - 1].low - low;
+
+        if (upMove > downMove && upMove > 0) {
+            plusDMs.push(upMove);
+            minusDMs.push(0);
+        } else if (downMove > upMove && downMove > 0) {
+            plusDMs.push(0);
+            minusDMs.push(downMove);
+        } else {
+            plusDMs.push(0);
+            minusDMs.push(0);
+        }
+    }
+
+    // 计算平滑的TR、+DM和-DM
+    let atr = trs.slice(0, period).reduce((sum, val) => sum + val, 0) / period;
+    let apdm = plusDMs.slice(0, period).reduce((sum, val) => sum + val, 0) / period;
+    let amdm = minusDMs.slice(0, period).reduce((sum, val) => sum + val, 0) / period;
+
+    // 计算后续平滑值
+    for (let i = period; i < trs.length; i++) {
+        atr = (atr * (period - 1) + trs[i]) / period;
+        apdm = (apdm * (period - 1) + plusDMs[i]) / period;
+        amdm = (amdm * (period - 1) + minusDMs[i]) / period;
+    }
+
+    // 计算方向指标
+    const pdi = (apdm / atr) * 100;
+    const mdi = (amdm / atr) * 100;
+
+    // 计算方向差异和ADX
+    const dx = (Math.abs(pdi - mdi) / (pdi + mdi)) * 100;
+
+    // 初始ADX是前period个DX的平均值
+    let adx = trs.slice(0, period).reduce((sum, _, idx) =>
+        sum + (idx >= period - 1 ? dx : 0), 0) / period;
+
+    // 平滑ADX
+    for (let i = period; i < trs.length; i++) {
+        adx = (adx * (period - 1) + dx) / period;
+    }
+
+    return Math.min(Math.max(adx / 100, 0), 1); // 标准化到0-1范围
+}
+
+function computeMACD(prices, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+    if (prices.length < slowPeriod + signalPeriod) return 0;
+
+    const closes = prices.map(p => p.close);
+
+    // 计算EMA函数
+    const ema = (data, period) => {
+        const k = 2 / (period + 1);
+        let ema = data.slice(0, period).reduce((sum, val) => sum + val, 0) / period;
+        for (let i = period; i < data.length; i++) {
+            ema = (data[i] - ema) * k + ema;
+        }
+        return ema;
+    };
+
+    // 计算MACD线（快线）
+    const fastEMA = ema(closes, fastPeriod);
+    const slowEMA = ema(closes, slowPeriod);
+    const macdLine = fastEMA - slowEMA;
+
+    // 计算信号线（慢线）
+    const macdValues = [];
+    for (let i = closes.length - signalPeriod; i < closes.length; i++) {
+        macdValues.push(ema(closes.slice(i - fastPeriod, i), fastPeriod) -
+            ema(closes.slice(i - slowPeriod, i), slowPeriod));
+    }
+    const signalLine = ema(macdValues, signalPeriod);
+
+    // 返回MACD柱状图（MACD线 - 信号线）
+    return macdLine - signalLine;
+}
+
+function computeRSI(prices, period = 14) {
+    if (prices.length < period + 1) return 50; // 中性值
+
+    let gains = 0;
+    let losses = 0;
+
+    // 计算初始平均值
+    for (let i = 1; i <= period; i++) {
+        const change = prices[i].close - prices[i - 1].close;
+        if (change > 0) gains += change;
+        else losses -= change;
+    }
+
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+
+    // 计算后续平滑值
+    for (let i = period + 1; i < prices.length; i++) {
+        const change = prices[i].close - prices[i - 1].close;
+
+        if (change > 0) {
+            avgGain = (avgGain * (period - 1) + change) / period;
+            avgLoss = (avgLoss * (period - 1)) / period;
+        } else {
+            avgGain = (avgGain * (period - 1)) / period;
+            avgLoss = (avgLoss * (period - 1) - change) / period;
+        }
+    }
+
+    // 避免除以零
+    if (avgLoss === 0) return 100;
+
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
 }
