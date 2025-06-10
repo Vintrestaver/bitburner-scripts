@@ -28,10 +28,12 @@ export async function main(ns) {
     // =============== 服务器状态缓存 ===============
     class ServerCache {
         static cache = new Map();
+        static expiration = new Map();
+        static CACHE_TTL = 5000; // 5秒缓存有效期
         
         static get(ns, server, property) {
             const key = `${server}|${property}`;
-            if (!this.cache.has(key)) {
+            if (!this.isValid(key)) {
                 this.update(ns, server, property);
             }
             return this.cache.get(key);
@@ -53,15 +55,29 @@ export async function main(ns) {
             }
             
             this.cache.set(key, value);
+            this.expiration.set(key, Date.now() + this.CACHE_TTL);
             return value;
         }
         
         static batchUpdate(ns, server) {
-            this.update(ns, server, 'maxMoney');
-            this.update(ns, server, 'money');
-            this.update(ns, server, 'maxRam');
-            this.update(ns, server, 'usedRam');
-            this.update(ns, server, 'security');
+            const properties = ['maxMoney', 'money', 'maxRam', 'usedRam', 'security'];
+            properties.forEach(prop => this.update(ns, server, prop));
+        }
+        
+        static isValid(key) {
+            return this.cache.has(key) && 
+                   this.expiration.has(key) && 
+                   this.expiration.get(key) > Date.now();
+        }
+        
+        static clearExpired() {
+            const now = Date.now();
+            for (const [key, expire] of this.expiration) {
+                if (expire <= now) {
+                    this.cache.delete(key);
+                    this.expiration.delete(key);
+                }
+            }
         }
     }
 
@@ -69,6 +85,8 @@ export async function main(ns) {
     class ResourceManager {
         static availableExes = [];
         static scriptRamCache = new Map();
+        static scriptRamExpiration = new Map();
+        static CACHE_TTL = 10000; // 10秒缓存有效期
         
         static async scanExes(ns) {
             this.availableExes = [];
@@ -80,10 +98,33 @@ export async function main(ns) {
         
         static getScriptRam(ns, script, host) {
             const key = `${host}|${script}`;
-            if (!this.scriptRamCache.has(key)) {
-                this.scriptRamCache.set(key, ns.getScriptRam(script, host));
+            if (!this.isValid(key)) {
+                this.updateCache(ns, script, host);
             }
             return this.scriptRamCache.get(key);
+        }
+        
+        static updateCache(ns, script, host) {
+            const key = `${host}|${script}`;
+            const ram = ns.getScriptRam(script, host);
+            this.scriptRamCache.set(key, ram);
+            this.scriptRamExpiration.set(key, Date.now() + this.CACHE_TTL);
+        }
+        
+        static isValid(key) {
+            return this.scriptRamCache.has(key) && 
+                   this.scriptRamExpiration.has(key) && 
+                   this.scriptRamExpiration.get(key) > Date.now();
+        }
+        
+        static clearExpired() {
+            const now = Date.now();
+            for (const [key, expire] of this.scriptRamExpiration) {
+                if (expire <= now) {
+                    this.scriptRamCache.delete(key);
+                    this.scriptRamExpiration.delete(key);
+                }
+            }
         }
     }
 
@@ -277,7 +318,8 @@ export async function main(ns) {
         updateDashboard(cycleIndex, actions);
         
         // 缓存过期处理
-        ServerCache.cache.clear();
+        ServerCache.clearExpired();
+        ResourceManager.clearExpired();
         await ns.sleep(1000);
     }
 }
