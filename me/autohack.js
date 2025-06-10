@@ -229,8 +229,12 @@ export async function main(ns) {
         
         if (currentSecurity > minSecurity + CONFIG.THRESHOLDS.SECURITY_BUFFER) {
             const script = CONFIG.FILES.WEAK;
-            const ramCost = ResourceManager.getScriptRam(ns, script, host);
-            const threads = Math.floor(freeRam / ramCost);
+        const ramCost = ResourceManager.getScriptRam(ns, script, host);
+        if (ramCost <= 0) {
+            ns.print(`ERROR: Script ${script} not found on ${host} or RAM cost is zero.`);
+            return null;
+        }
+        const threads = Math.floor(freeRam / ramCost);
             if (threads > 0) {
                 ns.exec(script, host, threads, target);
                 return 'W';
@@ -245,6 +249,10 @@ export async function main(ns) {
         if (currentMoney < maxMoney * CONFIG.THRESHOLDS.MONEY_RATIO) {
             const script = CONFIG.FILES.GROW;
             const ramCost = ResourceManager.getScriptRam(ns, script, host);
+            if (ramCost <= 0) {
+                ns.print(`ERROR: Script ${script} not found on ${host} or RAM cost is zero.`);
+                return null;
+            }
             const threads = Math.floor(freeRam / ramCost);
             if (threads > 0) {
                 ns.exec(script, host, threads, target);
@@ -256,6 +264,10 @@ export async function main(ns) {
         // 执行攻击
         const script = CONFIG.FILES.HACK;
         const ramCost = ResourceManager.getScriptRam(ns, script, host);
+        if (ramCost <= 0) {
+            ns.print(`ERROR: Script ${script} not found on ${host} or RAM cost is zero.`);
+            return null;
+        }
         const maxThreads = Math.floor(freeRam / ramCost);
         let threads = maxThreads;
         
@@ -276,23 +288,44 @@ export async function main(ns) {
     // =============== 监控面板 ===============
     const updateDashboard = (cycleIndex, actions) => {
         ns.clearLog();
-        ns.print('╔═══════════════════════════════════════╗');
-        ns.print(`║ 状态: ${CONFIG.CYCLE_CHARS[cycleIndex]} 目标数: ${TargetScheduler.targets.length} 主机数: ${TargetScheduler.hosts.length} ║`);
-        ns.print('╠═══════════════════════════════════════╣');
+        const totalMoney = TargetScheduler.targets.reduce((sum, t) => 
+            sum + ServerCache.get(ns, t.server, 'money'), 0);
+        const totalMaxMoney = TargetScheduler.targets.reduce((sum, t) => 
+            sum + ServerCache.get(ns, t.server, 'maxMoney'), 0);
         
-        // 显示前5个目标
-        for (let i = 0; i < Math.min(5, TargetScheduler.targets.length); i++) {
+        ns.print('╔══════════════════════════════════════════════════════════╗');
+        ns.print(`║ 状态: ${CONFIG.CYCLE_CHARS[cycleIndex]} 黑客等级: ${ns.getHackingLevel().toString().padEnd(4)} ` +
+                 `目标: ${TargetScheduler.targets.length.toString().padEnd(3)} ` +
+                 `主机: ${TargetScheduler.hosts.length.toString().padEnd(3)} ║`);
+        ns.print('╠══════════════════════════════════════════════════════════╣');
+        ns.print(`║ 总资金: ${ns.formatNumber(totalMoney).padEnd(15)} ` +
+                 `/${ns.formatNumber(totalMaxMoney)} ` +
+                 `(${ns.formatPercent(totalMoney / totalMaxMoney, 1)}) ║`);
+        ns.print('╠════───────────────────────────┬─────────────┬────────────╣');
+        ns.print('║ 目标名称               状态 │ 当前资金    │ 最大资金   ║');
+        ns.print('╠════───────────────────────────┼─────────────┼────────────╣');
+        
+        // 显示前8个目标
+        for (let i = 0; i < Math.min(8, TargetScheduler.targets.length); i++) {
             const target = TargetScheduler.targets[i].server;
             const money = ServerCache.get(ns, target, 'money');
             const maxMoney = ServerCache.get(ns, target, 'maxMoney');
             const ratio = money / maxMoney;
+            const action = actions[target] || ' ';
+            const security = ServerCache.get(ns, target, 'security');
+            const minSecurity = ServerCache.get(ns, target, 'minSecurity');
             
-            ns.print(`║ ${actions[target] || ' '} ${target.padEnd(15)} ` +
-                     `${ns.formatPercent(ratio, 1).padStart(6)} ${ns.formatNumber(money).padStart(12)}/${
-                     ns.formatNumber(maxMoney)} ║`);
+            ns.print(`║ ${action} ${target.padEnd(20)} ` +
+                     `${security.toFixed(1).padStart(5)}/${minSecurity.toFixed(1)} ` +
+                     `│ ${ns.formatNumber(money).padStart(11)} ` +
+                     `│ ${ns.formatNumber(maxMoney).padStart(10)} ║`);
         }
         
-        ns.print('╚═══════════════════════════════════════╝');
+        ns.print('╚══════════════════════════════════════════════════════════╝');
+        
+        // 底部状态栏
+        const usedRam = ns.getScriptRam(ns.getScriptName()) * ns.scriptRunning(ns.getScriptName(), 'home');
+        ns.print(` RAM使用: ${ns.formatRam(usedRam)} | 运行时间: ${ns.tFormat(ns.getTimeSinceLastAug())}`);
     };
 
     // =============== 主循环 ===============
