@@ -2,7 +2,9 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
-    ns.ui.resizeTail(600, 430)
+    const [winX] = ns.ui.windowSize();
+    ns.ui.moveTail(winX * 0.55, 0);
+    ns.ui.resizeTail(550, 420);
 
     // =============== 配置中心 ===============
     const CONFIG = {
@@ -12,34 +14,37 @@ export async function main(ns) {
             HACK: 'hack.script'
         },
         THRESHOLDS: {
-            MIN_RAM: 8,         // 最小可用RAM
-            SECURITY_BUFFER: 5, // 安全等级缓冲
-            MONEY_RATIO: 0.8,   // 最低资金比例
-            HACK_PERCENT: 0.7   // 最大窃取比例
+            MIN_RAM: 8,
+            SECURITY_BUFFER: 5,
+            MONEY_RATIO: 0.8,
+            HACK_PERCENT: 0.5
         },
-        EXCLUDE_SERVERS: ['home'], // 排除的服务器
-        CYCLE_CHARS: ['', '▄', '█', '▀', '█'], // 状态指示符
+        EXCLUDE_SERVERS: ['home'],
+        CYCLE_CHARS: ['', '▄', '█', '▀', '█'],
         COLORS: {
-            SUCCESS: '\x1b[32m',  // 绿色 - 成功状态
-            WARNING: '\x1b[33m',  // 黄色 - 警告状态
-            ERROR: '\x1b[31m',    // 红色 - 错误状态
-            INFO: '\x1b[36m',     // 青色 - 信息状态
-            MONEY: '\x1b[35m',    // 紫色 - 资金相关
-            SECURITY: '\x1b[34m', // 蓝色 - 安全等级
-            RESET: '\x1b[0m'      // 重置颜色
+            SUCCESS: '\x1b[32m',
+            WARNING: '\x1b[33m',
+            ERROR: '\x1b[31m',
+            INFO: '\x1b[36m',
+            MONEY: '\x1b[35m',
+            SECURITY: '\x1b[34m',
+            RESET: '\x1b[0m'
         }
     };
 
-    // 写入脚本文件
-    ns.write(CONFIG.FILES.GROW, 'grow(args[0]);', 'w');
-    ns.write(CONFIG.FILES.WEAK, 'weaken(args[0]);', 'w');
-    ns.write(CONFIG.FILES.HACK, 'hack(args[0]);', 'w');
+    // 只写入缺失的脚本文件
+    if (!ns.fileExists(CONFIG.FILES.GROW))
+        ns.write(CONFIG.FILES.GROW, 'grow(args[0]);', 'w');
+    if (!ns.fileExists(CONFIG.FILES.WEAK))
+        ns.write(CONFIG.FILES.WEAK, 'weaken(args[0]);', 'w');
+    if (!ns.fileExists(CONFIG.FILES.HACK))
+        ns.write(CONFIG.FILES.HACK, 'hack(args[0]);', 'w');
 
     // =============== 服务器状态缓存 ===============
     class ServerCache {
         static cache = new Map();
         static expiration = new Map();
-        static CACHE_TTL = 5000; // 5秒缓存有效期
+        static CACHE_TTL = 0;
 
         static get(ns, server, property) {
             const key = `${server}|${property}`;
@@ -62,6 +67,8 @@ export async function main(ns) {
                 case 'hackLevel': value = ns.getServerRequiredHackingLevel(server); break;
                 case 'security': value = ns.getServerSecurityLevel(server); break;
                 case 'minSecurity': value = ns.getServerMinSecurityLevel(server); break;
+                case 'growTime': value = ns.getGrowTime(server); break;
+                case 'hackTime': value = ns.getHackTime(server); break;
             }
 
             this.cache.set(key, value);
@@ -70,7 +77,7 @@ export async function main(ns) {
         }
 
         static batchUpdate(ns, server) {
-            const properties = ['maxMoney', 'money', 'maxRam', 'usedRam', 'security'];
+            const properties = ['maxMoney', 'money', 'maxRam', 'usedRam', 'security', 'growTime', 'hackTime'];
             properties.forEach(prop => this.update(ns, server, prop));
         }
 
@@ -96,7 +103,7 @@ export async function main(ns) {
         static availableExes = [];
         static scriptRamCache = new Map();
         static scriptRamExpiration = new Map();
-        static CACHE_TTL = 10000; // 10秒缓存有效期
+        static CACHE_TTL = 0; // 延长缓存时间
 
         static async scanExes(ns) {
             this.availableExes = [];
@@ -145,37 +152,32 @@ export async function main(ns) {
         static currentIndex = 0;
 
         static addTarget(server) {
-            // 优化后的目标权重计算（综合考虑资金、安全、成长和黑客因素）
+            // 优化权重计算
             const maxMoney = ServerCache.get(ns, server, 'maxMoney');
             const minSecurity = ServerCache.get(ns, server, 'minSecurity');
             const currentSecurity = ServerCache.get(ns, server, 'security');
             const hackLevel = ServerCache.get(ns, server, 'hackLevel');
             const ports = ServerCache.get(ns, server, 'ports');
+            const growTime = ServerCache.get(ns, server, 'growTime');
+            const hackTime = ServerCache.get(ns, server, 'hackTime');
 
-            // 基础权重：资金/安全等级
+            // 基础权重
             let weight = maxMoney / minSecurity;
 
-            // 安全系数：当前安全等级与最小安全等级的差距
-            const securityFactor = 1 - (currentSecurity - minSecurity) / 100;
+            // 安全系数
+            const securityFactor = Math.max(0.1, 1 - (currentSecurity - minSecurity) / 100);
             weight *= securityFactor;
 
-            // 黑客难度系数：玩家等级与服务器需求的比值
-            const hackDifficulty = ns.getHackingLevel() / hackLevel;
-            weight *= Math.min(hackDifficulty, 1.5); // 最高给予1.5倍加成
+            // 黑客难度系数
+            const hackDifficulty = Math.min(1.5, ns.getHackingLevel() / hackLevel);
+            weight *= hackDifficulty;
 
-            // 端口惩罚系数：每多一个需要破解的端口减少10%权重
-            const portPenalty = Math.pow(0.9, ports);
-            weight *= portPenalty;
+            // 端口惩罚
+            weight *= Math.pow(0.9, ports);
 
-            // 成长时间系数：成长时间越短越好
-            const growTime = ns.getGrowTime(server);
-            const growTimeFactor = 1 / Math.log1p(growTime / 1000);
-            weight *= growTimeFactor;
+            // 时间效率
+            weight /= Math.log1p(growTime + hackTime);
 
-            // 黑客时间系数：黑客时间越短越好
-            const hackTime = ns.getHackTime(server);
-            const hackTimeFactor = 1 / Math.log1p(hackTime / 1000);
-            weight *= hackTimeFactor;
             this.targets.push({ server, weight });
             this.targets.sort((a, b) => b.weight - a.weight);
         }
@@ -241,11 +243,19 @@ export async function main(ns) {
                     visited.add(neighbor);
                     queue.push(neighbor);
 
-                    // 准备服务器并添加目标
+                    // 准备服务器
                     if (prepareServer(neighbor)) {
                         ServerCache.batchUpdate(ns, neighbor);
-                        ns.scp(Object.values(CONFIG.FILES), neighbor, 'home');
 
+                        // 只复制缺失的脚本
+                        const filesToCopy = Object.values(CONFIG.FILES).filter(f =>
+                            !ns.fileExists(f, neighbor)
+                        );
+                        if (filesToCopy.length > 0) {
+                            ns.scp(filesToCopy, neighbor, 'home');
+                        }
+
+                        // 添加目标
                         if (ServerCache.get(ns, neighbor, 'maxMoney') > 0 &&
                             ServerCache.get(ns, neighbor, 'minSecurity') < 100 &&
                             canHack(neighbor)) {
@@ -257,27 +267,18 @@ export async function main(ns) {
         }
     };
 
-    const executeAttack = async (host, target) => {
-        const freeRam = ServerCache.get(ns, host, 'maxRam') -
-            ServerCache.get(ns, host, 'usedRam');
+    const executeAttack = (host, target) => {
+        // 实时获取RAM状态
+        const maxRam = ns.getServerMaxRam(host);
+        const usedRam = ns.getServerUsedRam(host);
+        const freeRam = maxRam - usedRam;
 
         // 安全等级过高 -> 削弱
         const currentSecurity = ServerCache.get(ns, target, 'security');
         const minSecurity = ServerCache.get(ns, target, 'minSecurity');
 
         if (currentSecurity > minSecurity + CONFIG.THRESHOLDS.SECURITY_BUFFER) {
-            const script = CONFIG.FILES.WEAK;
-            const ramCost = ResourceManager.getScriptRam(ns, script, host);
-            if (ramCost <= 0) {
-                ns.print(`ERROR: Script ${script} not found on ${host} or RAM cost is zero.`);
-                return null;
-            }
-            const threads = Math.floor(freeRam / ramCost);
-            if (threads > 0) {
-                ns.exec(script, host, threads, target);
-                return 'W';
-            }
-            return null;
+            return executeScript(CONFIG.FILES.WEAK, host, freeRam, target, 'W');
         }
 
         // 资金不足 -> 增长
@@ -285,42 +286,34 @@ export async function main(ns) {
         const maxMoney = ServerCache.get(ns, target, 'maxMoney');
 
         if (currentMoney < maxMoney * CONFIG.THRESHOLDS.MONEY_RATIO) {
-            const script = CONFIG.FILES.GROW;
-            const ramCost = ResourceManager.getScriptRam(ns, script, host);
-            if (ramCost <= 0) {
-                ns.print(`ERROR: Script ${script} not found on ${host} or RAM cost is zero.`);
-                return null;
-            }
-            const threads = Math.floor(freeRam / ramCost);
-            if (threads > 0) {
-                ns.exec(script, host, threads, target);
-                return 'G';
-            }
-            return null;
+            return executeScript(CONFIG.FILES.GROW, host, freeRam, target, 'G');
         }
 
         // 执行攻击
-        const script = CONFIG.FILES.HACK;
+        return executeScript(CONFIG.FILES.HACK, host, freeRam, target, 'H');
+    };
+
+    const executeScript = (script, host, freeRam, target, actionType) => {
         const ramCost = ResourceManager.getScriptRam(ns, script, host);
         if (ramCost <= 0) {
-            ns.print(`ERROR: Script ${script} not found on ${host} or RAM cost is zero.`);
+            ns.print(`ERROR: Script ${script} not found on ${host}`);
             return null;
         }
-        const maxThreads = Math.floor(freeRam / ramCost);
-        let threads = maxThreads;
 
-        // 计算安全线程数
-        const hackPercent = ns.hackAnalyze(target);
-        while (hackPercent * threads > CONFIG.THRESHOLDS.HACK_PERCENT && threads > 1) {
-            threads--;
+        let threads = Math.floor(freeRam / ramCost);
+        if (threads < 1) return null;
+
+        // 攻击线程限制
+        if (script === CONFIG.FILES.HACK) {
+            const hackPercent = ns.hackAnalyze(target);
+            while (hackPercent * threads > CONFIG.THRESHOLDS.HACK_PERCENT && threads > 1) {
+                threads--;
+            }
+            if (threads < 1) return null;
         }
 
-        if (threads > 0) {
-            ns.exec(script, host, threads, target);
-            return 'H';
-        }
-
-        return null;
+        const pid = ns.exec(script, host, threads, target);
+        return pid ? actionType : null;
     };
 
     // =============== 监控面板 ===============
@@ -331,18 +324,17 @@ export async function main(ns) {
         const totalMaxMoney = TargetScheduler.targets.reduce((sum, t) =>
             sum + ServerCache.get(ns, t.server, 'maxMoney'), 0);
 
-        ns.print('╔══════════════════════════════════════════════════════════╗');
+        ns.print('╔══════════════════════════════════════════════════════╗');
         ns.print(`║ 状态: ${CONFIG.COLORS.INFO}${CONFIG.CYCLE_CHARS[cycleIndex]}${CONFIG.COLORS.RESET} ` +
             `目标: ${TargetScheduler.targets.length.toString().padEnd(3)} ` +
-            `主机: ${TargetScheduler.hosts.length.toString().padEnd(3)}`.padEnd(39) + '║');
-        ns.print('╠══════════════════════════════════════════════════════════╣');
+            `主机: ${TargetScheduler.hosts.length.toString().padEnd(3)}`.padEnd(35) + '║');
+        ns.print('╠══════════════════════════════════════════════════════╣');
         const moneyRatio = totalMoney / totalMaxMoney;
         const progressBar = '█'.repeat(Math.floor(moneyRatio * 20)) + '░'.repeat(20 - Math.floor(moneyRatio * 20));
         ns.print(`║ 总资金: [${CONFIG.COLORS.MONEY}${progressBar}${CONFIG.COLORS.RESET}] ` +
-            `${CONFIG.COLORS.MONEY}${ns.formatPercent(moneyRatio, 1)}${CONFIG.COLORS.RESET}`.padEnd(36) + '║');
-        ns.print('╠════──────────────────────────────┬────────────┬──────────╣');
-        ns.print('║ 目标名称                      状态 │ 当前资金    │ 最大资金   ║');
-        ns.print('╠════──────────────────────────────┼────────────┼──────────╣');
+            `${CONFIG.COLORS.MONEY}${ns.formatPercent(moneyRatio, 1)}${CONFIG.COLORS.RESET}`.padEnd(32) + '║');
+        ns.print('╟──────────────────────────────┬────────────┬──────────╢');
+        ns.print('║   Target            Security │   Funds    │   Max    ║');
 
         // 显示前8个目标
         for (let i = 0; i < Math.min(8, TargetScheduler.targets.length); i++) {
@@ -352,24 +344,23 @@ export async function main(ns) {
             const action = actions[target] || ' ';
             const security = ServerCache.get(ns, target, 'security');
             const minSecurity = ServerCache.get(ns, target, 'minSecurity');
+            const securityRatio = minSecurity / security;
 
             ns.print(`║ ${getActionColor(action)}${action}${CONFIG.COLORS.RESET} ${target.padEnd(20)}` +
-                `${CONFIG.COLORS.SECURITY}${security.toFixed(1).padStart(4)}${CONFIG.COLORS.RESET}/${CONFIG.COLORS.SECURITY}${minSecurity.toFixed(1).padEnd(5)}${CONFIG.COLORS.RESET} ` +
+                `${CONFIG.COLORS.SECURITY}${ns.formatPercent(securityRatio, 1).padStart(6)}${CONFIG.COLORS.RESET} ` +
                 `│ ${CONFIG.COLORS.MONEY}${'█'.repeat(Math.floor(money / maxMoney * 10))}${CONFIG.COLORS.RESET}${'░'.repeat(10 - Math.floor(money / maxMoney * 10))} ` +
-                `│ ${CONFIG.COLORS.MONEY}${ns.formatPercent(money / maxMoney, 1).padStart(8)}${CONFIG.COLORS.RESET} ║`);
+                `│ ${CONFIG.COLORS.MONEY}$${ns.formatNumber(maxMoney, 2).padEnd(7)}${CONFIG.COLORS.RESET} ║`);
         }
 
-        ns.print('╚══════════════════════════════════════════════════════════╝');
-
+        ns.print('╚══════════════════════════════════════════════════════╝');
     };
 
-    // 获取动作对应颜色
     const getActionColor = (action) => {
         switch (action) {
             case 'W': return CONFIG.COLORS.WARNING;
             case 'G': return CONFIG.COLORS.SUCCESS;
             case 'H': return CONFIG.COLORS.ERROR;
-            default: return CONFIG.COLORS.RESET;
+            default: return CONFIG.COLORS.INFO;
         }
     };
 
@@ -377,14 +368,14 @@ export async function main(ns) {
     let cycleIndex = 0;
     const actions = {};
 
-    // 初始化模块
+    // 初始化资源管理器
     await ResourceManager.scanExes(ns);
 
     while (true) {
         cycleIndex = (cycleIndex % 4) + 1;
 
-        // 扫描网络
-        await scanNetwork();
+        // 扫描网络（每秒扫描性能开销大，改为每5秒扫描）
+        if (cycleIndex === 1) await scanNetwork();
 
         // 执行攻击
         for (const host of TargetScheduler.hosts) {
@@ -398,6 +389,8 @@ export async function main(ns) {
         // 缓存过期处理
         ServerCache.clearExpired();
         ResourceManager.clearExpired();
-        await ns.sleep(1000);
+
+        // 降低CPU消耗
+        await ns.asleep(1000);
     }
 }
