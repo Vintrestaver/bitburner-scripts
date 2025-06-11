@@ -18,7 +18,16 @@ export async function main(ns) {
             HACK_PERCENT: 0.7   // 最大窃取比例
         },
         EXCLUDE_SERVERS: ['home'], // 排除的服务器
-        CYCLE_CHARS: ['', '▄', '█', '▀', '█'] // 状态指示符
+        CYCLE_CHARS: ['', '▄', '█', '▀', '█'], // 状态指示符
+        COLORS: {
+            SUCCESS: '\x1b[32m',  // 绿色 - 成功状态
+            WARNING: '\x1b[33m',  // 黄色 - 警告状态
+            ERROR: '\x1b[31m',    // 红色 - 错误状态
+            INFO: '\x1b[36m',     // 青色 - 信息状态
+            MONEY: '\x1b[35m',    // 紫色 - 资金相关
+            SECURITY: '\x1b[34m', // 蓝色 - 安全等级
+            RESET: '\x1b[0m'      // 重置颜色
+        }
     };
 
     // 写入脚本文件
@@ -323,16 +332,17 @@ export async function main(ns) {
             sum + ServerCache.get(ns, t.server, 'maxMoney'), 0);
 
         ns.print('╔══════════════════════════════════════════════════════════╗');
-        ns.print(`║ 状态: ${CONFIG.CYCLE_CHARS[cycleIndex]} ` +
+        ns.print(`║ 状态: ${CONFIG.COLORS.INFO}${CONFIG.CYCLE_CHARS[cycleIndex]}${CONFIG.COLORS.RESET} ` +
             `目标: ${TargetScheduler.targets.length.toString().padEnd(3)} ` +
             `主机: ${TargetScheduler.hosts.length.toString().padEnd(3)}`.padEnd(39) + '║');
         ns.print('╠══════════════════════════════════════════════════════════╣');
-        ns.print(`║ 总资金: ${ns.formatNumber(totalMoney).padEnd(8)}` +
-            `/${ns.formatNumber(totalMaxMoney).padEnd(8)}` +
-            `(${ns.formatPercent(totalMoney / totalMaxMoney, 1)})`.padEnd(33) + '║');
-        ns.print('╠════──────────────────────────────┬──────────┬────────────╣');
-        ns.print('║ 目标名称                      状态 │ 当前资金  │ 最大资金     ║');
-        ns.print('╠════──────────────────────────────┼──────────┼────────────╣');
+        const moneyRatio = totalMoney / totalMaxMoney;
+        const progressBar = '█'.repeat(Math.floor(moneyRatio * 20)) + '░'.repeat(20 - Math.floor(moneyRatio * 20));
+        ns.print(`║ 总资金: [${CONFIG.COLORS.MONEY}${progressBar}${CONFIG.COLORS.RESET}] ` +
+            `${CONFIG.COLORS.MONEY}${ns.formatPercent(moneyRatio, 1)}${CONFIG.COLORS.RESET}`.padEnd(36) + '║');
+        ns.print('╠════──────────────────────────────┬────────────┬──────────╣');
+        ns.print('║ 目标名称                      状态 │ 当前资金    │ 最大资金   ║');
+        ns.print('╠════──────────────────────────────┼────────────┼──────────╣');
 
         // 显示前8个目标
         for (let i = 0; i < Math.min(8, TargetScheduler.targets.length); i++) {
@@ -343,14 +353,24 @@ export async function main(ns) {
             const security = ServerCache.get(ns, target, 'security');
             const minSecurity = ServerCache.get(ns, target, 'minSecurity');
 
-            ns.print(`║ ${action} ${target.padEnd(20)} ` +
-                `${security.toFixed(1).padStart(5)}/${minSecurity.toFixed(1)} ` +
-                `│ ${ns.formatNumber(money).padStart(8)} ` +
-                `│ ${ns.formatNumber(maxMoney).padStart(10)} ║`);
+            ns.print(`║ ${getActionColor(action)}${action}${CONFIG.COLORS.RESET} ${target.padEnd(20)}` +
+                `${CONFIG.COLORS.SECURITY}${security.toFixed(1).padStart(4)}${CONFIG.COLORS.RESET}/${CONFIG.COLORS.SECURITY}${minSecurity.toFixed(1).padEnd(5)}${CONFIG.COLORS.RESET} ` +
+                `│ ${CONFIG.COLORS.MONEY}${'█'.repeat(Math.floor(money / maxMoney * 10))}${CONFIG.COLORS.RESET}${'░'.repeat(10 - Math.floor(money / maxMoney * 10))} ` +
+                `│ ${CONFIG.COLORS.MONEY}${ns.formatPercent(money / maxMoney, 1).padStart(8)}${CONFIG.COLORS.RESET} ║`);
         }
 
         ns.print('╚══════════════════════════════════════════════════════════╝');
 
+    };
+
+    // 获取动作对应颜色
+    const getActionColor = (action) => {
+        switch (action) {
+            case 'W': return CONFIG.COLORS.WARNING;
+            case 'G': return CONFIG.COLORS.SUCCESS;
+            case 'H': return CONFIG.COLORS.ERROR;
+            default: return CONFIG.COLORS.RESET;
+        }
     };
 
     // =============== 主循环 ===============
