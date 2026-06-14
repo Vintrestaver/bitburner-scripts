@@ -27,16 +27,30 @@ const MAX_TICK_HISTORY = 151;        // 保留的最大历史价格记录数
 const INVERSION_DETECTION_TOLERANCE = 0.10; // 近期预测与长期预测偏差在此范围内视为潜在反转
 const INVERSION_LAG_TOLERANCE = 5;   // 反转可在预期检测时间之后额外信任这么多 tick
 // (备注：33 只股票 × 每周期 45% 反转概率 ≈ 每周期约 15 次预期反转)
+// 反转阈值常量
+const INVERSION_THRESHOLD_MIN = 6;    // 初始阈值：需要至少 6 只股票同时反转才能确认周期
+const INVERSION_THRESHOLD_MAX = 14;   // 阈值上限：防止过度敏感，最多需 14 只股票同时确认
+const INVERSION_DECAY_RATE = 0.90;    // 每周期衰减率：阈值会随时间回落，避免系统永久迟钝
+
+// 周期位置估算偏移量（未检测到精确周期点时，保守估计已过的 tick 数）
+const EST_CYCLE_OFFSET_UNKNOWN = 10;  // 从未检测到周期时：假定距离结束还有 65 tick
+const EST_CYCLE_OFFSET_LOW = 20;      // 低置信度（阈值 7-8）：假定距离结束还有 55 tick
+const EST_CYCLE_OFFSET_MED = 30;      // 中置信度（阈值 9-10）：假定距离结束还有 45 tick
 
 // 以下预 4S 变量在脚本运行期间动态变化
 let marketCycleDetected = false;  // 在检测到市场周期之前，不应做出冒险的购买决策
 let detectedCycleTick = 0;        // 检测到市场周期点后重置为零
-let inversionAgreementThreshold = 6; // 当这么多股票同时被检测为"反转"，确认市场周期点
+let inversionAgreementThreshold = INVERSION_THRESHOLD_MIN; // 当这么多股票同时被检测为"反转"，确认市场周期点
 
 const EXPECTED_TICK_TIME = 6000;
 const CATCH_UP_TICK_TIME = 4000;
 let lastTick = 0;
 const SLEEP_INTERVAL = 1000;
+
+// 止损止盈参数（基于游戏源码：Bitburner 使用百分比价格变动，非固定值）
+const HARD_STOP_LOSS_PCT = 0.12;   // 硬止损：亏损超过 12% 立即平仓（不含佣金，因佣金已计入累计利润）
+const TRAILING_STOP_PCT = 0.06;    // 移动止盈：从最高盈利回撤超过 6% 时锁定利润
+const MIN_PROFIT_FOR_TRAILING = 0.02; // 至少盈利 2% 后才启用移动止盈
 
 let resetInfo = (/**@returns{ResetInfo}*/() => undefined)();
 let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)();
@@ -120,14 +134,33 @@ function getShortValue(stk) { return stk.sharesShort * (2 * stk.boughtPriceShort
 /** 总持仓市值 */
 function getPositionValue(stk) { return getLongValue(stk) + getShortValue(stk); }
 
-/** 在当前预期收益下，覆盖买卖价差所需的 tick 数
- *  由复利公式推导：future = current * (1 + er) ^ n，解 n */
-function getTimeToCoverSpread(stk) {
-    return Math.log(stk.ask_price / stk.bid_price) / Math.log(1 + calcAbsReturn(stk));
+/** 在当前预期收益下，覆盖买卖价差所需的 tick 数（向上取整）
+ *  由复利公式推导：future = current * (1 + er) ^ n，解 n
+ *  买入的前提：剩余 tick 数 > 覆盖价差所需 tick（否则无法在周期结束前盈利） */
+function getTicksToCoverSpread(stk) {
+    return Math.ceil(Math.log(stk.ask_price / stk.bid_price) / Math.log(1 + calcAbsReturn(stk)));
 }
 
-/** 黑名单窗口：在距市场周期结束这么多个 tick 内不应买入 */
-function getBlackoutWindow(stk) { return Math.ceil(getTimeToCoverSpread(stk)); }
+/** 计算当前持仓的实际盈亏率（不含佣金，因佣金已在买卖时计入累计利润）
+ * 多头：当前卖出价 / 买入价 - 1
+ * 空头：(2×空头买入价 - 当前买入价) / 空头买入价 - 1 */
+function calcCurrentPnl(stk) {
+    if (stk.sharesLong > 0)
+        return stk.bid_price / stk.boughtPrice - 1;
+    if (stk.sharesShort > 0)
+        return (2 * stk.boughtPriceShort - stk.ask_price) / stk.boughtPriceShort - 1;
+    return 0;
+}
+
+/** 计算信号强度权重（0.5 ~ 1.0），用于动态调整仓位大小
+ * 结合概率偏离度（proximity to 0.5）和预期收益率两个维度
+ * 信号越强 → 权重越接近 1.0 → 可分配更多仓位
+ * 信号越弱 → 权重越接近 0.5 → 仓位受限 */
+function getSignalWeight(stk) {
+    const probDeviation = Math.abs(stk.prob - 0.5) * 2; // 0~1：概率偏离 0.5 的程度
+    const erNormalized = Math.min(calcAbsReturn(stk) * 500, 1); // ER × 500 归一化到 0~1（ER≈0.002 即为 1.0）
+    return 0.5 + 0.5 * (probDeviation + erNormalized) / 2; // 范围 0.5 ~ 1.0
+}
 
 // ============================================================
 // 主函数
@@ -179,7 +212,7 @@ export async function main(ns) {
     lastLog = "";
     marketCycleDetected = false;
     detectedCycleTick = 0;
-    inversionAgreementThreshold = 6;
+    inversionAgreementThreshold = INVERSION_THRESHOLD_MIN;
 
     let myStocks = [], allStocks = [];
     let player = await getPlayerInfo(ns);
@@ -242,7 +275,7 @@ export async function main(ns) {
 
             // 检查是否已获得 4S 访问权限（一旦获得，无需再次检查）
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
- 
+
             const holdings = await refresh(ns, !pre4s, allStocks, myStocks);
             sortDirty = true; // refresh 可能更新了价格，标记排序失效
 
@@ -270,10 +303,31 @@ export async function main(ns) {
             }
 
             // -------------------------------------------------------
-            // 卖出阶段：卖出预期收益低于阈值的持仓
+            // 卖出阶段：卖出预期收益低于阈值的持仓、止损、止盈
             // -------------------------------------------------------
             let sales = 0;
             for (let stk of myStocks) {
+                const currentPnl = calcCurrentPnl(stk);
+
+                // 硬止损：实际亏损超过阈值立即平仓
+                if (currentPnl <= -HARD_STOP_LOSS_PCT) {
+                    log(ns, `STOP-LOSS: ${stk.sym} 亏损 ${(currentPnl * 100).toFixed(1)}% 触发硬止损 (阈值 ${(HARD_STOP_LOSS_PCT * 100).toFixed(0)}%)`);
+                    sales += await doSellAll(ns, stk);
+                    stk.warnedBadPurchase = false;
+                    continue;
+                }
+
+                // 移动止盈：从峰值回撤超过阈值，且仍有正盈利
+                if (currentPnl >= MIN_PROFIT_FOR_TRAILING
+                    && stk.peakPnl > MIN_PROFIT_FOR_TRAILING
+                    && currentPnl < stk.peakPnl - TRAILING_STOP_PCT) {
+                    log(ns, `TRAILING-STOP: ${stk.sym} 从峰值 ${(stk.peakPnl * 100).toFixed(1)}% 回撤至 ${(currentPnl * 100).toFixed(1)}%，触发移动止盈`);
+                    sales += await doSellAll(ns, stk);
+                    stk.warnedBadPurchase = false;
+                    continue;
+                }
+
+                // 原有卖出逻辑：预期收益低于阈值或多空方向反转
                 if (calcAbsReturn(stk) <= thresholdToSell
                     || (isBullish(stk) && stk.sharesShort > 0)
                     || (isBearish(stk) && stk.sharesLong > 0)) {
@@ -296,16 +350,23 @@ export async function main(ns) {
                 let cash = Math.min(playerStats.money - reserve, maxHoldings - holdings);
 
                 // 估算距离下一个市场周期还有多少 tick
+                // 使用保守偏移量：在无法精确定位周期时，假定更接近周期末尾
                 const estTick = Math.max(detectedCycleTick,
-                    MARKET_CYCLE_LENGTH - (!marketCycleDetected ? 10
-                        : inversionAgreementThreshold <= 8 ? 20
-                            : inversionAgreementThreshold <= 10 ? 30 : MARKET_CYCLE_LENGTH));
+                    MARKET_CYCLE_LENGTH - (!marketCycleDetected ? EST_CYCLE_OFFSET_UNKNOWN
+                        : inversionAgreementThreshold <= 8 ? EST_CYCLE_OFFSET_LOW
+                            : inversionAgreementThreshold <= 10 ? EST_CYCLE_OFFSET_MED : MARKET_CYCLE_LENGTH));
 
                 // 按购买优先级排序（仅价格变化后才重新排序）
+                // 使用 Schwartzian 变换（装饰-排序-去装饰）避免比较函数中重复计算
                 const sortedStocks = sortDirty
-                    ? [...allStocks].sort((a, b) =>
-                        (Math.ceil(getTimeToCoverSpread(a)) - Math.ceil(getTimeToCoverSpread(b)))
-                        || (calcAbsReturn(b) - calcAbsReturn(a)))
+                    ? allStocks
+                        .map(stk => ({
+                            stk,
+                            ttc: getTicksToCoverSpread(stk),
+                            absRet: calcAbsReturn(stk)
+                        }))
+                        .sort((a, b) => a.ttc - b.ttc || b.absRet - a.absRet)
+                        .map(item => item.stk)
                     : allStocks;
                 sortDirty = false;
 
@@ -313,7 +374,7 @@ export async function main(ns) {
                     if (cash <= 0) break;
 
                     // 不在黑名单窗口内买入
-                    if (getBlackoutWindow(stk) >= MARKET_CYCLE_LENGTH - estTick) continue;
+                    if (getTicksToCoverSpread(stk) >= MARKET_CYCLE_LENGTH - estTick) continue;
                     if (pre4s && (Math.max(pre4sMinHoldTime, pre4sMinBlackoutWindow) >= MARKET_CYCLE_LENGTH - estTick)) continue;
 
                     // 跳过已达持仓上限、预期收益不足、或禁止做空时的看跌股票
@@ -325,9 +386,10 @@ export async function main(ns) {
                     if (pre4s && (stk.lastInversion < minTickHistory
                         || Math.abs(stk.prob - 0.5) < pre4sBuyThresholdProbability)) continue;
 
-                    // 分散化：单只股票持仓不超过总资产指定比例
+                    // 分散化：单只股票持仓不超过总资产指定比例（信号越强，权重越高）
+                    const signalWeight = pre4s ? getSignalWeight(stk) : 1.0; // 4S 阶段信号更可靠，全部使用基准权重
                     let budget = Math.min(cash,
-                        maxHoldings * (diversification + stk.spread_pct)
+                        maxHoldings * (diversification * signalWeight + stk.spread_pct)
                         - getPositionValue(stk) * (1.01 + stk.spread_pct));
 
                     let purchasePrice = isBullish(stk) ? stk.ask_price : stk.bid_price;
@@ -336,7 +398,7 @@ export async function main(ns) {
                     if (numShares <= 0) continue;
 
                     // 确保在周期结束前能覆盖佣金成本
-                    let ticksBeforeCycleEnd = MARKET_CYCLE_LENGTH - estTick - getTimeToCoverSpread(stk);
+                    let ticksBeforeCycleEnd = MARKET_CYCLE_LENGTH - estTick - getTicksToCoverSpread(stk);
                     if (ticksBeforeCycleEnd < 1) continue;
 
                     let estEndOfCycleValue = numShares * purchasePrice
@@ -353,7 +415,7 @@ export async function main(ns) {
                             `\n预算: ${formatMoney(budget)}，仅能购买 ${numShares.toLocaleString('en')}${owned ? ' 额外' : ''}股 ` +
                             `@ ${formatMoney(purchasePrice)}。` +
                             `\n预计市场周期剩余 ${MARKET_CYCLE_LENGTH - estTick} tick，减去覆盖价差所需的 ` +
-                            `${getTimeToCoverSpread(stk).toFixed(1)} tick ` +
+                            `${getTicksToCoverSpread(stk).toFixed(1)} tick ` +
                             `（价差 ${(stk.spread_pct * 100).toFixed(2)}%），` +
                             `剩余 ${ticksBeforeCycleEnd.toFixed(1)} tick 仅能产生 ${formatMoney(estEndOfCycleValue)}，` +
                             `低于 2 倍佣金 (${formatMoney(2 * commission, 3)})`);
@@ -419,6 +481,7 @@ async function initAllStocks(ns) {
         boughtPriceShort: 0,
         ticksHeld: 0,
         warnedBadPurchase: false,
+        peakPnl: 0,  // 该股票持仓期间的峰值盈利率（用于移动止盈）
         // 预 4S 预测属性
         priceHistory: [],
         lastInversion: 0,
@@ -491,6 +554,10 @@ async function refresh(ns, has4s, allStocks, myStocks) {
 
         if (hasPosition(stk)) myStocks.push(stk);
         else stk.ticksHeld = 0;
+
+        // 更新止盈峰值追踪
+        const currentPnl = calcCurrentPnl(stk);
+        if (currentPnl > stk.peakPnl) stk.peakPnl = currentPnl;
 
         if (ticked) {
             // 更新持有时长
@@ -583,7 +650,7 @@ async function updateForecast(ns, allStocks, has4s) {
             ? detectInversion(stk.prob, stk.lastTickProbability || stk.prob)
             : detectInversion(preNearTermWindowProb, stk.nearTermForecast);
         stk.lastTickProbability = stk.prob;
- 
+
         if (stk.possibleInversionDetected) inversionsDetected.push(stk);
     }
 
@@ -600,9 +667,15 @@ async function updateForecast(ns, allStocks, has4s) {
                     `将当前市场 tick 从 ${detectedCycleTick} 更改为 ${newPredictedCycleTick}。`);
             marketCycleDetected = true;
             detectedCycleTick = newPredictedCycleTick;
-            // 提高阈值，防止未来误判（上限 14）
-            inversionAgreementThreshold = Math.max(14, inversionsDetected.length);
+            // 自适应阈值：不低于当前反转数，但不超过上限，防止系统永久迟钝
+            inversionAgreementThreshold = Math.min(INVERSION_THRESHOLD_MAX,
+                Math.max(inversionAgreementThreshold, inversionsDetected.length));
         }
+    }
+    // 在周期结束时衰减阈值，让系统逐渐恢复灵敏度（无论是否有反转检测）
+    if (detectedCycleTick === 0 && inversionAgreementThreshold > INVERSION_THRESHOLD_MIN) {
+        const decayed = Math.floor(inversionAgreementThreshold * INVERSION_DECAY_RATE);
+        inversionAgreementThreshold = Math.max(INVERSION_THRESHOLD_MIN, decayed);
     }
 
     // ── 第二遍遍历：应用反转、计算概率、生成调试摘要 ──
@@ -635,7 +708,7 @@ async function updateForecast(ns, allStocks, has4s) {
                 `Prob:${(stk.prob * 100).toFixed(0).padStart(3)}% (t${probWindowLength.toFixed(0).padStart(2)}:${(stk.longTermForecast * 100).toFixed(0).padStart(3)}%, ` +
                 `t${Math.min(stk.priceHistory.length, nearTermForecastWindowLength).toFixed(0).padStart(2)}:${(stk.nearTermForecast * 100).toFixed(0).padStart(3)}%) ` +
                 `tLast⇄:${(stk.lastInversion + 1).toFixed(0).padStart(3)} Vol:${(stk.vol * 100).toFixed(2)}% ER:${formatBP(calcExpectedReturn(stk)).padStart(8)} ` +
-                `Spread:${(stk.spread_pct * 100).toFixed(2)}% ttProfit:${getBlackoutWindow(stk).toFixed(0).padStart(3)}`;
+                `Spread:${(stk.spread_pct * 100).toFixed(2)}% ttProfit:${getTicksToCoverSpread(stk).toFixed(0).padStart(3)}`;
             if (hasPosition(stk))
                 stk.debugLog += ` Pos: ${formatNumberShort(getOwnedShares(stk), 3, 1)} (${getOwnedShares(stk) == stk.maxShares ? 'max' :
                     ((100 * getOwnedShares(stk) / stk.maxShares).toFixed(0).padStart(2) + '%')}) ${stk.sharesLong > 0 ? 'long ' : 'short'} (held ${stk.ticksHeld} ticks)`;
@@ -649,7 +722,7 @@ async function updateForecast(ns, allStocks, has4s) {
             `(${marketCycleDetected ? (100 * inversionAgreementThreshold / 19).toPrecision(2) : '0'}% 确定) ` +
             `当前股票摘要与预 4S 预测（按回本时间排序）：\n` +
             allStocks.sort((a, b) =>
-                (Math.ceil(getTimeToCoverSpread(a)) - Math.ceil(getTimeToCoverSpread(b)))
+                (getTicksToCoverSpread(a) - getTicksToCoverSpread(b))
                 || (calcAbsReturn(b) - calcAbsReturn(a))
             ).map(s => s.debugLog).join("\n");
         if (showMarketSummary) await updateForecastFile(ns, summary); else log(ns, summary);
@@ -717,7 +790,7 @@ async function doBuy(ns, stk, sharesToBuy) {
             `${formatNumberShort(sharesToBuy + getOwnedShares(stk), 3, 3).padStart(5)}/${formatNumberShort(stk.maxShares, 3, 3).padStart(5)}`}) ` +
         `${stk.sym.padEnd(5)} @ ${formatMoney(expectedPrice).padStart(9)} 总额 ${formatMoney(sharesToBuy * expectedPrice).padStart(9)} ` +
         `(价差:${(stk.spread_pct * 100).toFixed(2)}% ER:${formatBP(calcExpectedReturn(stk)).padStart(8)}) ` +
-        `回本 tick: ${getTimeToCoverSpread(stk).toFixed(2)}`, noisy, 'info');
+        `回本 tick: ${getTicksToCoverSpread(stk).toFixed(2)}`, noisy, 'info');
 
     let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort'));
 
@@ -807,17 +880,32 @@ let log = (ns, message, tprint = false, toastStyle = "") => {
 /** 更新状态显示（包括 HUD）
  * @param {NS} ns */
 function doStatusUpdate(ns, stocks, myStocks, hudElement = null) {
-    let maxReturnBP = 10000 * Math.max(...myStocks.map(s => calcAbsReturn(s)));
-    let minReturnBP = 10000 * Math.min(...myStocks.map(s => calcAbsReturn(s)));
-    let estHoldingsCost = myStocks.reduce((sum, stk) => sum + (hasPosition(stk) ? commission : 0) +
-        stk.sharesLong * stk.boughtPrice + stk.sharesShort * stk.boughtPriceShort, 0);
-    let liquidationValue = myStocks.reduce((sum, stk) => sum - (hasPosition(stk) ? commission : 0) + getPositionValue(stk), 0);
-    let status = `多头 ${myStocks.filter(s => s.sharesLong > 0).length}, 空头 ${myStocks.filter(s => s.sharesShort > 0).length} / ${stocks.length} 只股票 ` +
-        (myStocks.length === 0 ? '' : `(ER ${minReturnBP.toFixed(1)}-${maxReturnBP.toFixed(1)} BP) `) +
-        `累计利润: ${formatMoney(totalProfit, 3)} 持仓: ${formatMoney(liquidationValue, 3)} ` +
-        `(成本: ${formatMoney(estHoldingsCost, 3)}) 净收益: ${formatMoney(totalProfit + liquidationValue - estHoldingsCost, 3)}`;
+    // 单次 reduce 遍历计算所有统计指标，避免 myStocks 被多次遍历
+    const stats = myStocks.length === 0 ? null : myStocks.reduce((acc, stk) => {
+        const absRet = 10000 * calcAbsReturn(stk);
+        if (absRet > acc.maxRet) acc.maxRet = absRet;
+        if (absRet < acc.minRet) acc.minRet = absRet;
+        if (hasPosition(stk)) {
+            acc.cost += commission + stk.sharesLong * stk.boughtPrice + stk.sharesShort * stk.boughtPriceShort;
+            acc.liqValue -= commission;
+        }
+        acc.liqValue += getPositionValue(stk);
+        if (stk.sharesLong > 0) acc.longs++;
+        if (stk.sharesShort > 0) acc.shorts++;
+        return acc;
+    }, { maxRet: -Infinity, minRet: Infinity, cost: 0, liqValue: 0, longs: 0, shorts: 0 });
+
+    let status;
+    if (stats === null) {
+        status = `无持仓 / ${stocks.length} 只股票 `;
+    } else {
+        status = `多头 ${stats.longs}, 空头 ${stats.shorts} / ${stocks.length} 只股票 ` +
+            `(ER ${stats.minRet.toFixed(1)}-${stats.maxRet.toFixed(1)} BP) `;
+    }
+    status += `累计利润: ${formatMoney(totalProfit, 3)} 持仓: ${formatMoney(stats ? stats.liqValue : 0, 3)} ` +
+        `(成本: ${formatMoney(stats ? stats.cost : 0, 3)}) 净收益: ${formatMoney(totalProfit + (stats ? stats.liqValue : 0) - (stats ? stats.cost : 0), 3)}`;
     log(ns, status);
-    if (hudElement) hudElement.innerText = formatMoney(liquidationValue, 6, 3);
+    if (hudElement) hudElement.innerText = formatMoney(stats ? stats.liqValue : 0, 6, 3);
 }
 
 // ============================================================
