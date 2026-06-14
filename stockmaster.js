@@ -3,92 +3,161 @@ import {
     formatMoney, formatNumberShort, formatDuration, getStockSymbols
 } from './helpers.js'
 
+// ============================================================
+// 全局配置变量
+// ============================================================
+
 let disableShorts = false;
-let commission = 100000; // Buy/sell commission. Expected profit must exceed this to buy anything.
-let totalProfit = 0.0; // We can keep track of how much we've earned since start.
-let lastLog = ""; // We update faster than the stock-market ticks, but we don't log anything unless there's been a change
-let allStockSymbols = null; // Stores the set of all symbols collected at start
-let mock = false; // If set to true, will "mock" buy/sell but not actually buy/sell anythingorecast
-let noisy = false; // If set to true, tprints and announces each time stocks are bought/sold
-// Pre-4S configuration (influences how we play the stock market before we have 4S data, after which everything's fool-proof)
-let showMarketSummary = false;  // If set to true, will always generate and display the pre-4s forecast table in a separate tail window
-let minTickHistory; // This much history must be gathered before we will offer a stock forecast.
-let longTermForecastWindowLength; // This much history will be used to determine the historical probability of the stock (so long as no inversions are detected)
-let nearTermForecastWindowLength; // This much history will be used to detect recent negative trends and act on them immediately.
-// The following pre-4s constants are hard-coded (not configurable via command line) but may require tweaking
-const marketCycleLength = 75; // Every this many ticks, all stocks have a 45% chance of "reversing" their probability. Something we must detect and act on quick to not lose profits.
-const maxTickHistory = 151; // This much history will be kept for purposes of detemining volatility and perhaps one day pinpointing the market cycle tick
-const inversionDetectionTolerance = 0.10; // If the near-term forecast is within this distance of (1 - long-term forecast), consider it a potential "inversion"
-const inversionLagTolerance = 5; // An inversion is "trusted" up to this many ticks after the normal nearTermForecastWindowLength expected detection time
-// (Note: 33 total stocks * 45% inversion chance each cycle = ~15 expected inversions per cycle)
-// The following pre-4s values are set during the lifetime of the program
-let marketCycleDetected = false; // We should not make risky purchasing decisions until the stock market cycle is detected. This can take a long time, but we'll be thanked
-let detectedCycleTick = 0; // This will be reset to zero once we've detected the market cycle point.
-let inversionAgreementThreshold = 6; // If this many stocks are detected as being in an "inversion", consider this the stock market cycle point
-const expectedTickTime = 6000;
-const catchUpTickTime = 4000;
+let commission = 100000;   // 买卖佣金。预期收益必须超过此值才会买入
+let totalProfit = 0.0;     // 记录自启动以来的累计收益
+let lastLog = "";          // 避免重复日志：仅在消息变化时才输出
+let allStockSymbols = null; // 启动时收集的所有股票代码集合
+let mock = false;          // 模拟模式：只记录买卖操作，不实际执行交易
+let noisy = false;         // 详细模式：每次买卖时打印并弹窗通知
+
+// 4S 数据之前的配置（在没有 4S 数据时影响交易策略）
+let showMarketSummary = false;  // 启用后，在独立窗口中持续显示市场预判摘要
+let minTickHistory;             // 需要积累至少这么多历史数据才能给出预测
+let longTermForecastWindowLength;  // 用于计算历史概率的长期窗口长度（无反转时）
+let nearTermForecastWindowLength;  // 用于检测近期反转趋势的短期窗口长度
+
+// 以下常量是预 4S 阶段的硬编码参数（不可通过命令行配置），但可能需要微调
+const MARKET_CYCLE_LENGTH = 75;      // 每这么多 tick，所有股票有 45% 概率发生"反转"
+const MAX_TICK_HISTORY = 151;        // 保留的最大历史价格记录数
+const INVERSION_DETECTION_TOLERANCE = 0.10; // 近期预测与长期预测偏差在此范围内视为潜在反转
+const INVERSION_LAG_TOLERANCE = 5;   // 反转可在预期检测时间之后额外信任这么多 tick
+// (备注：33 只股票 × 每周期 45% 反转概率 ≈ 每周期约 15 次预期反转)
+
+// 以下预 4S 变量在脚本运行期间动态变化
+let marketCycleDetected = false;  // 在检测到市场周期之前，不应做出冒险的购买决策
+let detectedCycleTick = 0;        // 检测到市场周期点后重置为零
+let inversionAgreementThreshold = 6; // 当这么多股票同时被检测为"反转"，确认市场周期点
+
+const EXPECTED_TICK_TIME = 6000;
+const CATCH_UP_TICK_TIME = 4000;
 let lastTick = 0;
-let sleepInterval = 1000;
-let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information about the current bitnode
+const SLEEP_INTERVAL = 1000;
+
+let resetInfo = (/**@returns{ResetInfo}*/() => undefined)();
 let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)();
+
+// ============================================================
+// 命令行参数定义
+// ============================================================
 
 let options;
 const argsSchema = [
-    ['l', false], // Stop any other running stockmaster.js instances and sell all stocks
-    ['liquidate', false], // Long-form alias for the above flag.
-    ['mock', false], // If set to true, will "mock" buy/sell but not actually buy/sell anything
-    ['noisy', false], // If set to true, tprints and announces each time stocks are bought/sold
-    ['disable-shorts', false], // If set to true, will not short any stocks. Will be set depending on having SF8.2 by default.
-    ['reserve', null], // A fixed amount of money to not spend
-    ['fracB', 0.4], // Fraction of assets to have as liquid before we consider buying more stock
-    ['fracH', 0.2], // Fraction of assets to retain as cash in hand when buying
-    ['buy-threshold', 0.0001], // Buy only stocks forecasted to earn better than a 0.01% return (1 Basis Point)
-    ['sell-threshold', 0], // Sell stocks forecasted to earn less than this return (default 0% - which happens when prob hits 50% or worse)
-    ['diversification', 0.34], // Before we have 4S data, we will not hold more than this fraction of our portfolio as a single stock
-    ['disableHud', false], // Disable showing stock value in the HUD panel
-    ['disable-purchase-tix-api', false], // Disable purchasing the TIX API if you do not already have it.
-    // The following settings are related only to tweaking pre-4s stock-market logic
-    ['show-pre-4s-forecast', false], // If set to true, will always generate and display the pre-4s forecast (if false, it's only shown while we hold no stocks)
-    ['show-market-summary', false], // Same effect as "show-pre-4s-forecast", this market summary has become so informative, it's valuable even with 4s
-    ['pre-4s-buy-threshold-probability', 0.15], // Before we have 4S data, only buy stocks whose probability is more than this far away from 0.5, to account for imprecision
-    ['pre-4s-buy-threshold-return', 0.0015], // Before we have 4S data, Buy only stocks forecasted to earn better than this return (default 0.25% or 25 Basis Points)
-    ['pre-4s-sell-threshold-return', 0.0005], // Before we have 4S data, Sell stocks forecasted to earn less than this return (default 0.15% or 15 Basis Points)
-    ['pre-4s-min-tick-history', 21], // This much history must be gathered before we will use pre-4s stock forecasts to make buy/sell decisions. (Default 21)
-    ['pre-4s-forecast-window', 51], // This much history will be used to determine the historical probability of the stock (so long as no inversions are detected) (Default 76)
-    ['pre-4s-inversion-detection-window', 10], // This much history will be used to detect recent negative trends and act on them immediately. (Default 10)
-    ['pre-4s-min-blackout-window', 10], // Do not make any new purchases this many ticks before the detected stock market cycle tick, to avoid buying a position that reverses soon after
-    ['pre-4s-minimum-hold-time', 10], // A recently bought position must be held for this long before selling, to avoid rash decisions due to noise after a fresh market cycle. (Default 10)
-    ['buy-4s-budget', 0.8], // Maximum corpus value we will sacrifice in order to buy 4S. Setting to 0 will never buy 4s.
+    ['l', false],                        // 停止其他 stockmaster.js 实例并卖出所有股票
+    ['liquidate', false],                // 上述标志的长格式别名
+    ['mock', false],                     // 模拟模式：只记录不实际买卖
+    ['noisy', false],                    // 详细模式：每次买卖时打印并弹窗通知
+    ['disable-shorts', false],           // 禁止做空。如未解锁 SF8.2 则自动启用
+    ['reserve', null],                   // 保留不用于投资的固定金额
+    ['fracB', 0.4],                      // 考虑继续买入之前，流动资产占总资产的最小比例
+    ['fracH', 0.2],                      // 买入时保留的现金比例
+    ['buy-threshold', 0.0001],           // 只买入预期收益高于此值的股票（默认 0.01% = 1 BP）
+    ['sell-threshold', 0],               // 卖出预期收益低于此值的股票（默认 0%，即概率 ≤ 50% 时卖出）
+    ['diversification', 0.34],           // 4S 数据之前，单只股票持仓不超过总资产此比例
+    ['disableHud', false],               // 禁用 HUD 面板中的股票价值显示
+    ['disable-purchase-tix-api', false], // 禁用自动购买 TIX API（如果尚未拥有）
+    // 以下设置仅用于调整预 4S 阶段的交易策略
+    ['show-pre-4s-forecast', false],     // 始终显示预 4S 预测（false 时仅在无持仓时显示）
+    ['show-market-summary', false],      // 等同于 "show-pre-4s-forecast"
+    ['pre-4s-buy-threshold-probability', 0.15],  // 预 4S：仅买入概率偏离 0.5 超过此值的股票
+    ['pre-4s-buy-threshold-return', 0.0015],     // 预 4S：仅买入预期收益高于此值的股票（默认 0.15% = 15 BP）
+    ['pre-4s-sell-threshold-return', 0.0005],    // 预 4S：卖出预期收益低于此值的股票（默认 0.05% = 5 BP）
+    ['pre-4s-min-tick-history', 21],             // 预 4S：积累这么多历史数据后才开始交易决策（默认 21）
+    ['pre-4s-forecast-window', 51],              // 预 4S：长期预测窗口长度（默认 51）
+    ['pre-4s-inversion-detection-window', 10],   // 预 4S：反转检测窗口长度（默认 10）
+    ['pre-4s-min-blackout-window', 10],          // 预 4S：市场周期点前多少 tick 不买入
+    ['pre-4s-minimum-hold-time', 10],            // 预 4S：买入后至少持有多少 tick 才考虑卖出（默认 10）
+    ['buy-4s-budget', 0.8],                      // 为购买 4S 数据愿牺牲的最大资金比例。设为 0 则永不购买
 ];
+
+// ============================================================
+// 自动补全
+// ============================================================
 
 export function autocomplete(data, args) {
     data.flags(argsSchema);
     return [];
 }
 
-/** Requires access to the TIX API. Purchases access to the 4S Mkt Data API as soon as it can
+// ============================================================
+// 股票对象辅助函数（从 initAllStocks 提取为独立函数，避免每只股票重复创建函数实例）
+// ============================================================
+
+/** 计算预期收益（含保守标准差修正） */
+function calcExpectedReturn(stk) {
+    let normalizedProb = (stk.prob - 0.5);
+    let conservativeProb = normalizedProb < 0
+        ? Math.min(0, normalizedProb + stk.probStdDev)
+        : Math.max(0, normalizedProb - stk.probStdDev);
+    return stk.vol * conservativeProb;
+}
+
+/** 预期收益绝对值（适用于做多/做空均可的情况） */
+function calcAbsReturn(stk) { return Math.abs(calcExpectedReturn(stk)); }
+
+/** 看涨（概率 > 50%） */
+function isBullish(stk) { return stk.prob > 0.5; }
+
+/** 看跌 */
+function isBearish(stk) { return !isBullish(stk); }
+
+/** 持有总股数 */
+function getOwnedShares(stk) { return stk.sharesLong + stk.sharesShort; }
+
+/** 是否有持仓 */
+function hasPosition(stk) { return getOwnedShares(stk) > 0; }
+
+/** 多头持仓市值 */
+function getLongValue(stk) { return stk.sharesLong * stk.bid_price; }
+
+/** 空头持仓市值 */
+function getShortValue(stk) { return stk.sharesShort * (2 * stk.boughtPriceShort - stk.ask_price); }
+
+/** 总持仓市值 */
+function getPositionValue(stk) { return getLongValue(stk) + getShortValue(stk); }
+
+/** 在当前预期收益下，覆盖买卖价差所需的 tick 数
+ *  由复利公式推导：future = current * (1 + er) ^ n，解 n */
+function getTimeToCoverSpread(stk) {
+    return Math.log(stk.ask_price / stk.bid_price) / Math.log(1 + calcAbsReturn(stk));
+}
+
+/** 黑名单窗口：在距市场周期结束这么多个 tick 内不应买入 */
+function getBlackoutWindow(stk) { return Math.ceil(getTimeToCoverSpread(stk)); }
+
+// ============================================================
+// 主函数
+// ============================================================
+
+/** 需要 TIX API 访问权限。会尽快购买 4S 市场数据 API。
  * @param {NS} ns */
 export async function main(ns) {
     const runOptions = getConfiguration(ns, argsSchema);
-    if (!runOptions) return; // Invalid options, or ran in --help mode.
+    if (!runOptions) return; // 无效参数或 --help 模式
 
-    // If given the "liquidate" command, try to kill any versions of this script trading in stocks
-    // NOTE: We must do this immediately before we start resetting / overwriting global state below (which is shared between script instances)
+    // 如果指定了 "liquidate" 命令，尝试终止其他正在交易的脚本实例
+    // 注意：必须在重置全局状态之前立即执行（全局状态在多个脚本实例间共享）
     const hasTixApiAccess = await getNsDataThroughFile(ns, 'ns.stock.hasTixApiAccess()');
     if (runOptions.l || runOptions.liquidate) {
-        if (!hasTixApiAccess) return log(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
-        log(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
+        if (!hasTixApiAccess) return log(ns, 'ERROR: 无法清算股票，因为没有 Tix Api 访问权限', true, 'error');
+        log(ns, 'INFO: 正在终止其他 stockmaster 进程...', false, 'info');
         await runCommand(ns, `ns.ps().filter(proc => proc.filename == '${ns.getScriptName()}' && !proc.args.includes('-l') && !proc.args.includes('--liquidate'))` +
             `.forEach(proc => ns.kill(proc.pid))`, '/Temp/kill-stockmarket-scripts.js');
-        log(ns, 'INFO: Checking for and liquidating any stocks...', false, 'info');
-        await liquidate(ns); // Sell all stocks
+        log(ns, 'INFO: 正在检查并清算所有股票...', false, 'info');
+        await liquidate(ns);
         return;
-    } // Otherwise, prevent multiple instances of this script from being started, even with different args.
+    }
+    // 防止同时运行多个实例（即使参数不同）
     if ((await instanceCount(ns)) > 1) return;
 
     ns.disableLog("ALL");
-    // Extract various options from the args (globals, purchasing decision factors, pre-4s factors)
-    options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
+
+    // 提取各类参数
+    options = runOptions;
     mock = options.mock;
     noisy = options.noisy;
     const fracB = options.fracB;
@@ -101,36 +170,45 @@ export async function main(ns) {
     const pre4sMinHoldTime = options['pre-4s-minimum-hold-time'] || 0;
     minTickHistory = options['pre-4s-min-tick-history'] || 21;
     nearTermForecastWindowLength = options['pre-4s-inversion-detection-window'] || 10;
-    longTermForecastWindowLength = options['pre-4s-forecast-window'] || (marketCycleLength + 1);
+    longTermForecastWindowLength = options['pre-4s-forecast-window'] || (MARKET_CYCLE_LENGTH + 1);
     showMarketSummary = options['show-pre-4s-forecast'] || options['show-market-summary'];
-    // Other global values must be reset at start lest they be left in memory from a prior run
-    lastTick = 0, totalProfit = 0, lastLog = "", marketCycleDetected = false, detectedCycleTick = 0, inversionAgreementThreshold = 6;
+
+    // 重置全局状态（避免上次运行残留）
+    lastTick = 0;
+    totalProfit = 0;
+    lastLog = "";
+    marketCycleDetected = false;
+    detectedCycleTick = 0;
+    inversionAgreementThreshold = 6;
+
     let myStocks = [], allStocks = [];
     let player = await getPlayerInfo(ns);
     resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
 
-    if (!hasTixApiAccess) { // You cannot use the stockmaster until you have API access
+    // 如果没有 TIX API 访问权限，等待资金足够后自动购买
+    if (!hasTixApiAccess) {
         if (options['disable-purchase-tix-api'])
-            return log(ns, "ERROR: You do not have stock market API access, and --disable-purchase-tix-api is set.", true);
+            return log(ns, "ERROR: 你没有股票市场 API 访问权限，且 --disable-purchase-tix-api 已设置。", true);
         let success = false;
-        log(ns, `INFO: You are missing stock market API access. (NOTE: This is granted for free once you have SF8). ` +
-            `Waiting until we have the 5b needed to buy it. (Run with --disable-purchase-tix-api to disable this feature.)`, true);
+        log(ns, `INFO: 缺少股票市场 API 访问权限。（注意：拥有 SF8 后可免费获得。）` +
+            `等待资金达到 50 亿后自动购买。（可使用 --disable-purchase-tix-api 禁用此功能。）`, true);
         do {
-            await ns.sleep(sleepInterval);
+            await ns.sleep(SLEEP_INTERVAL);
             try {
                 const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
                 player = await getPlayerInfo(ns);
                 success = await tryGetStockMarketAccess(ns, player.money - reserve);
             } catch (err) {
-                log(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error while waiting to buy stock market access:\n` +
+                log(ns, `WARNING: stockmaster.js 捕获（并抑制）了等待购买股票市场访问权限时的异常错误：\n` +
                     (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
             }
         } while (!success);
     }
 
-    const effectiveSourceFiles = await getActiveSourceFiles(ns, true); // Find out what source files the user has unlocked
+    // 检查源文件以确定是否允许做空
+    const effectiveSourceFiles = await getActiveSourceFiles(ns, true);
     if (!disableShorts && (effectiveSourceFiles[8] ?? 0) < 2) {
-        log(ns, "INFO: Shorting stocks has been disabled (you have not yet unlocked access to shorting)");
+        log(ns, "INFO: 做空功能已禁用（你尚未解锁做空权限）");
         disableShorts = true;
     }
 
@@ -138,507 +216,741 @@ export async function main(ns) {
     allStocks = await initAllStocks(ns);
     bitNodeMults = await tryGetBitNodeMultipliers(ns);
 
-    if (showMarketSummary) await launchSummaryTail(ns); // Opens a separate script / window to continuously display the Pre4S forecast
+    if (showMarketSummary) await launchSummaryTail(ns);
 
+    // 初始化 HUD 显示
     let hudElement = null;
     if (!disableHud) {
         hudElement = initializeHud();
         ns.atExit(() => hudElement.parentElement.parentElement.parentElement.removeChild(hudElement.parentElement.parentElement));
     }
 
-    log(ns, `Welcome! Please note: all stock purchases will initially result in a Net (unrealized) Loss. This is not only due to commission, but because each stock has a 'spread' (difference in buy price and sell price). ` +
-        `This script is designed to buy stocks that are most likely to surpass that loss and turn a profit, but it will take a few minutes to see the progress.\n\n` +
-        `If you choose to stop the script, make sure you SELL all your stocks (can go 'run ${ns.getScriptName()} --liquidate') to get your money back.\n\nGood luck!\n~ Insight\n\n`)
+    log(ns, `欢迎！请注意：所有股票购买起初都会显示净（未实现）亏损。这不仅是因为佣金，还因为每只股票都有"价差"（买入价与卖出价之间的差异）。` +
+        `本脚本旨在买入最有可能超越该亏损并盈利的股票，但需要几分钟才能看到进展。\n\n` +
+        `如果你决定停止脚本，请务必先卖出所有股票（可运行 'run ${ns.getScriptName()} --liquidate'）以取回资金。\n\n祝你好运！\n~ Insight\n\n`);
 
     let pre4s = true;
+    let sortDirty = true; // 用于缓存排序结果：价格变化时标记为需要重新排序
+
+    // ============================================================
+    // 主循环
+    // ============================================================
     while (true) {
         try {
             const playerStats = await getPlayerInfo(ns);
             const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
-            // Check whether we have 4s access yes (once we do, we can stop checking)
+
+            // 检查是否已获得 4S 访问权限（一旦获得，无需再次检查）
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
-            const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
-            const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
-            const maxHoldings = (1 - fracH) * corpus; // The largest value of stock we could hold without violiating fracH (Fraction to keep as cash)
+ 
+            const holdings = await refresh(ns, !pre4s, allStocks, myStocks);
+            sortDirty = true; // refresh 可能更新了价格，标记排序失效
+
+            const corpus = holdings + playerStats.money;
+            const maxHoldings = (1 - fracH) * corpus;
+
+            // 尝试购买 4S API
             if (pre4s && !mock && await tryGet4SApi(ns, playerStats, corpus * (options['buy-4s-budget'] - fracH) - reserve))
-                continue; // Start the loop over if we just bought 4S API access
-            // Be more conservative with our decisions if we don't have 4S data
+                continue;
+
+            // 根据是否有 4S 数据选择不同的买卖阈值
             const thresholdToBuy = pre4s ? options['pre-4s-buy-threshold-return'] : options['buy-threshold'];
             const thresholdToSell = pre4s ? options['pre-4s-sell-threshold-return'] : options['sell-threshold'];
+
+            // 更新 HUD 状态显示
             if (myStocks.length > 0)
                 doStatusUpdate(ns, allStocks, myStocks, hudElement);
             else if (hudElement) hudElement.innerText = "$0.000 ";
+
+            // 等待积累足够的历史数据
             if (pre4s && allStocks[0].priceHistory.length < minTickHistory) {
-                log(ns, `Building a history of stock prices (${allStocks[0].priceHistory.length}/${minTickHistory})...`);
-                await ns.sleep(sleepInterval);
+                log(ns, `正在积累股票价格历史数据 (${allStocks[0].priceHistory.length}/${minTickHistory})...`);
+                await ns.sleep(SLEEP_INTERVAL);
                 continue;
             }
 
-            // Sell forecasted-to-underperform shares (worse than some expected return threshold)
+            // -------------------------------------------------------
+            // 卖出阶段：卖出预期收益低于阈值的持仓
+            // -------------------------------------------------------
             let sales = 0;
             for (let stk of myStocks) {
-                if (stk.absReturn() <= thresholdToSell || stk.bullish() && stk.sharesShort > 0 || stk.bearish() && stk.sharesLong > 0) {
+                if (calcAbsReturn(stk) <= thresholdToSell
+                    || (isBullish(stk) && stk.sharesShort > 0)
+                    || (isBearish(stk) && stk.sharesLong > 0)) {
                     if (pre4s && stk.ticksHeld < pre4sMinHoldTime) {
-                        if (!stk.warnedBadPurchase) log(ns, `WARNING: Thinking of selling ${stk.sym} with ER ${formatBP(stk.absReturn())}, but holding out as it was purchased just ${stk.ticksHeld} ticks ago...`);
-                        stk.warnedBadPurchase = true; // Hack to ensure we don't spam this warning
+                        if (!stk.warnedBadPurchase)
+                            log(ns, `WARNING: 考虑卖出 ${stk.sym} (ER ${formatBP(calcAbsReturn(stk))})，但持有时长仅 ${stk.ticksHeld} tick，暂不卖出...`);
+                        stk.warnedBadPurchase = true;
                     } else {
                         sales += await doSellAll(ns, stk);
                         stk.warnedBadPurchase = false;
                     }
                 }
             }
-            if (sales > 0) continue; // If we sold anything, loop immediately (no need to sleep) and refresh stats immediately before making purchasing decisions.
+            if (sales > 0) continue; // 卖出后立即循环刷新数据，再做买入决策
 
-            // If we haven't gone above a certain liquidity threshold, don't attempt to buy more stock
-            // Avoids death-by-a-thousand-commissions before we get super-rich, stocks are capped, and this is no longer an issue
-            // BUT may mean we miss striking while the iron is hot while waiting to build up more funds.
+            // -------------------------------------------------------
+            // 买入阶段：资金充裕时买入预期收益最高的股票
+            // -------------------------------------------------------
             if (playerStats.money / corpus > fracB) {
-                // Compute the cash we have to spend (such that spending it all on stock would bring us down to a liquidity of fracH)
                 let cash = Math.min(playerStats.money - reserve, maxHoldings - holdings);
-                // If we haven't detected the market cycle (or haven't detected it reliably), assume it might be quite soon and restrict bets to those that can turn a profit in the very-near term.
-                const estTick = Math.max(detectedCycleTick, marketCycleLength - (!marketCycleDetected ? 10 : inversionAgreementThreshold <= 8 ? 20 : inversionAgreementThreshold <= 10 ? 30 : marketCycleLength));
-                // Buy shares with cash remaining in hand if exceeding some buy threshold. Prioritize targets whose expected return will cover the ask/bit spread the soonest
-                for (const stk of allStocks.sort(purchaseOrder)) {
-                    if (cash <= 0) break; // Break if we are out of money (i.e. from prior purchases)
-                    // Do not purchase a stock if it is not forecasted to recover from the ask/bid spread before the next market cycle and potential probability inversion
-                    if (stk.blackoutWindow() >= marketCycleLength - estTick) continue;
-                    if (pre4s && (Math.max(pre4sMinHoldTime, pre4sMinBlackoutWindow) >= marketCycleLength - estTick)) continue;
-                    // Skip if we already own all possible shares in this stock, or if the expected return is below our threshold, or if shorts are disabled and stock is bearish
-                    if (stk.ownedShares() == stk.maxShares || stk.absReturn() <= thresholdToBuy || (disableShorts && stk.bearish())) continue;
-                    // If pre-4s, do not purchase any stock whose last inversion was too recent, or whose probability is too close to 0.5
-                    if (pre4s && (stk.lastInversion < minTickHistory || Math.abs(stk.prob - 0.5) < pre4sBuyThresholdProbability)) continue;
 
-                    // Enforce diversification: Don't hold more than x% of our portfolio as a single stock (as corpus increases, this naturally stops being a limiter)
-                    // Inflate our budget / current position value by a factor of stk.spread_pct to avoid repeated micro-buys of a stock due to the buy/ask spread making holdings appear more diversified after purchase
-                    let budget = Math.min(cash, maxHoldings * (diversification + stk.spread_pct) - stk.positionValue() * (1.01 + stk.spread_pct))
-                    let purchasePrice = stk.bullish() ? stk.ask_price : stk.bid_price; // Depends on whether we will be buying a long or short position
+                // 估算距离下一个市场周期还有多少 tick
+                const estTick = Math.max(detectedCycleTick,
+                    MARKET_CYCLE_LENGTH - (!marketCycleDetected ? 10
+                        : inversionAgreementThreshold <= 8 ? 20
+                            : inversionAgreementThreshold <= 10 ? 30 : MARKET_CYCLE_LENGTH));
+
+                // 按购买优先级排序（仅价格变化后才重新排序）
+                const sortedStocks = sortDirty
+                    ? [...allStocks].sort((a, b) =>
+                        (Math.ceil(getTimeToCoverSpread(a)) - Math.ceil(getTimeToCoverSpread(b)))
+                        || (calcAbsReturn(b) - calcAbsReturn(a)))
+                    : allStocks;
+                sortDirty = false;
+
+                for (const stk of sortedStocks) {
+                    if (cash <= 0) break;
+
+                    // 不在黑名单窗口内买入
+                    if (getBlackoutWindow(stk) >= MARKET_CYCLE_LENGTH - estTick) continue;
+                    if (pre4s && (Math.max(pre4sMinHoldTime, pre4sMinBlackoutWindow) >= MARKET_CYCLE_LENGTH - estTick)) continue;
+
+                    // 跳过已达持仓上限、预期收益不足、或禁止做空时的看跌股票
+                    if (getOwnedShares(stk) == stk.maxShares
+                        || calcAbsReturn(stk) <= thresholdToBuy
+                        || (disableShorts && isBearish(stk))) continue;
+
+                    // 预 4S：跳过反转太近或概率太接近 0.5 的股票
+                    if (pre4s && (stk.lastInversion < minTickHistory
+                        || Math.abs(stk.prob - 0.5) < pre4sBuyThresholdProbability)) continue;
+
+                    // 分散化：单只股票持仓不超过总资产指定比例
+                    let budget = Math.min(cash,
+                        maxHoldings * (diversification + stk.spread_pct)
+                        - getPositionValue(stk) * (1.01 + stk.spread_pct));
+
+                    let purchasePrice = isBullish(stk) ? stk.ask_price : stk.bid_price;
                     let affordableShares = Math.floor((budget - commission) / purchasePrice);
-                    let numShares = Math.min(stk.maxShares - stk.ownedShares(), affordableShares);
+                    let numShares = Math.min(stk.maxShares - getOwnedShares(stk), affordableShares);
                     if (numShares <= 0) continue;
-                    // Don't buy fewer shares than can beat the comission before the next stock market cycle (after covering the spread), lest the position reverse before we break-even.
-                    let ticksBeforeCycleEnd = marketCycleLength - estTick - stk.timeToCoverTheSpread();
-                    if (ticksBeforeCycleEnd < 1) continue; // We're cutting it too close to the market cycle, position might reverse before we break-even on commission
-                    let estEndOfCycleValue = numShares * purchasePrice * ((stk.absReturn() + 1) ** ticksBeforeCycleEnd - 1); // Expected difference in purchase price and value at next market cycle end
-                    let owned = stk.ownedShares() > 0;
-                    if (estEndOfCycleValue <= 2 * commission)
-                        log(ns, (owned ? '' : `We currently have ${formatNumberShort(stk.ownedShares(), 3, 1)} shares in ${stk.sym} valued at ${formatMoney(stk.positionValue())} ` +
-                            `(${(100 * stk.positionValue() / maxHoldings).toFixed(1)}% of corpus, capped at ${(diversification * 100).toFixed(1)}% by --diversification).\n`) +
-                            `Despite attractive ER of ${formatBP(stk.absReturn())}, ${owned ? 'more ' : ''}${stk.sym} was not bought. ` +
-                            `\nBudget: ${formatMoney(budget)} can only buy ${numShares.toLocaleString('en')} ${owned ? 'more ' : ''}shares @ ${formatMoney(purchasePrice)}. ` +
-                            `\nGiven an estimated ${marketCycleLength - estTick} ticks left in market cycle, less ${stk.timeToCoverTheSpread().toFixed(1)} ticks to cover the spread (${(stk.spread_pct * 100).toFixed(2)}%), ` +
-                            `remaining ${ticksBeforeCycleEnd.toFixed(1)} ticks would only generate ${formatMoney(estEndOfCycleValue)}, which is less than 2x commission (${formatMoney(2 * commission, 3)})`);
-                    else
+
+                    // 确保在周期结束前能覆盖佣金成本
+                    let ticksBeforeCycleEnd = MARKET_CYCLE_LENGTH - estTick - getTimeToCoverSpread(stk);
+                    if (ticksBeforeCycleEnd < 1) continue;
+
+                    let estEndOfCycleValue = numShares * purchasePrice
+                        * ((calcAbsReturn(stk) + 1) ** ticksBeforeCycleEnd - 1);
+
+                    let owned = getOwnedShares(stk) > 0;
+                    if (estEndOfCycleValue <= 2 * commission) {
+                        log(ns, (owned ? '' : `当前持有 ${formatNumberShort(getOwnedShares(stk), 3, 1)} 股 ${stk.sym}，` +
+                            `市值 ${formatMoney(getPositionValue(stk))} ` +
+                            `(${(100 * getPositionValue(stk) / maxHoldings).toFixed(1)}% 总资产，上限为 ` +
+                            `${(diversification * 100).toFixed(1)}% --diversification)。\n`) +
+                            `尽管 ${stk.sym} 的 ER 为 ${formatBP(calcAbsReturn(stk))}，` +
+                            `但仍${owned ? '未追加' : '未'}买入。` +
+                            `\n预算: ${formatMoney(budget)}，仅能购买 ${numShares.toLocaleString('en')}${owned ? ' 额外' : ''}股 ` +
+                            `@ ${formatMoney(purchasePrice)}。` +
+                            `\n预计市场周期剩余 ${MARKET_CYCLE_LENGTH - estTick} tick，减去覆盖价差所需的 ` +
+                            `${getTimeToCoverSpread(stk).toFixed(1)} tick ` +
+                            `（价差 ${(stk.spread_pct * 100).toFixed(2)}%），` +
+                            `剩余 ${ticksBeforeCycleEnd.toFixed(1)} tick 仅能产生 ${formatMoney(estEndOfCycleValue)}，` +
+                            `低于 2 倍佣金 (${formatMoney(2 * commission, 3)})`);
+                    } else {
                         cash -= await doBuy(ns, stk, numShares);
+                    }
                 }
             }
         } catch (err) {
-            log(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error in the main loop:\n` +
+            log(ns, `WARNING: stockmaster.js 捕获（并抑制）了主循环中的异常错误：\n` +
                 (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
         }
-        await ns.sleep(sleepInterval);
+        await ns.sleep(SLEEP_INTERVAL);
     }
 }
 
-/** Ram-dodge getting updated player info. Note that this is the only async routine called in the main loop.
- * If latency or ram instability is an issue, you may wish to try uncommenting the direct request.
+// ============================================================
+// 辅助函数
+// ============================================================
+
+/** 获取玩家信息（通过临时脚本规避 RAM 开销）
  * @param {NS} ns
  * @returns {Promise<Player>} */
 async function getPlayerInfo(ns) {
     return await getNsDataThroughFile(ns, `ns.getPlayer()`);
 }
 
+/** 获取进入当前 BitNode 的时长（毫秒） */
 function getTimeInBitnode() { return Date.now() - resetInfo.lastNodeReset; }
 
-/* A sorting function to put stocks in the order we should prioritize investing in them */
-let purchaseOrder = (a, b) => (Math.ceil(a.timeToCoverTheSpread()) - Math.ceil(b.timeToCoverTheSpread())) || (b.absReturn() - a.absReturn());
-
-/** @param {NS} ns
- * Generic helper for dodging the hefty RAM requirements of stock functions by spawning a temporary script to collect info for us. */
+/** 获取所有股票的某个属性字典（通过临时脚本规避 RAM 开销）
+ * @param {NS} ns
+ * @param {string} stockFunction - 要调用的 ns.stock 方法名 */
 async function getStockInfoDict(ns, stockFunction) {
     allStockSymbols ??= await getStockSymbols(ns);
-    if (allStockSymbols == null) throw new Error(`No WSE API Access yet, this call to ns.stock.${stockFunction} is premature.`);
+    if (allStockSymbols == null) throw new Error(`尚未获得 WSE API 访问权限，调用 ns.stock.${stockFunction} 为时过早。`);
     return await getNsDataThroughFile(ns,
         `Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${stockFunction}(sym)]))`,
         `/Temp/stock-${stockFunction}.txt`, allStockSymbols);
-};
+}
 
-/** @param {NS} ns **/
+/** 初始化所有股票对象
+ * @param {NS} ns **/
 async function initAllStocks(ns) {
-    let dictMaxShares = await getStockInfoDict(ns, 'getMaxShares'); // Only need to get this once, it never changes
+    let dictMaxShares = await getStockInfoDict(ns, 'getMaxShares');
     return allStockSymbols.map(s => ({
         sym: s,
-        maxShares: dictMaxShares[s], // Value never changes once retrieved
-        expectedReturn: function () { // How much holdings are expected to appreciate (or depreciate) in the future
-            // To add conservatism to pre-4s estimates, we reduce the probability by 1 standard deviation without crossing the midpoint
-            let normalizedProb = (this.prob - 0.5);
-            let conservativeProb = normalizedProb < 0 ? Math.min(0, normalizedProb + this.probStdDev) : Math.max(0, normalizedProb - this.probStdDev);
-            return this.vol * conservativeProb;
-        },
-        absReturn: function () { return Math.abs(this.expectedReturn()); }, // Appropriate to use when can just as well buy a short position as a long position
-        bullish: function () { return this.prob > 0.5 },
-        bearish: function () { return !this.bullish(); },
-        ownedShares: function () { return this.sharesLong + this.sharesShort; },
-        owned: function () { return this.ownedShares() > 0; },
-        positionValueLong: function () { return this.sharesLong * this.bid_price; },
-        positionValueShort: function () { return this.sharesShort * (2 * this.boughtPriceShort - this.ask_price); }, // Shorts work a bit weird
-        positionValue: function () { return this.positionValueLong() + this.positionValueShort(); },
-        // How many stock market ticks must occur at the current expected return before we regain the value lost by the spread between buy and sell prices.
-        // This can be derived by taking the compound interest formula (future = current * (1 + expected_return) ^ n) and solving for n
-        timeToCoverTheSpread: function () { return Math.log(this.ask_price / this.bid_price) / Math.log(1 + this.absReturn()); },
-        // We should not buy this stock within this many ticks of a Market cycle, or we risk being forced to sell due to a probability inversion, and losing money due to the spread
-        blackoutWindow: function () { return Math.ceil(this.timeToCoverTheSpread()); },
-        // Pre-4s properties used for forecasting
+        maxShares: dictMaxShares[s],
+        // 价格相关属性（每次 refresh 时更新）
+        ask_price: 0,
+        bid_price: 0,
+        spread: 0,
+        spread_pct: 0,
+        price: 0,
+        vol: 0,
+        prob: 0,
+        probStdDev: 0,
+        // 持仓相关属性
+        position: null,
+        sharesLong: 0,
+        boughtPrice: 0,
+        sharesShort: 0,
+        boughtPriceShort: 0,
+        ticksHeld: 0,
+        warnedBadPurchase: false,
+        // 预 4S 预测属性
         priceHistory: [],
         lastInversion: 0,
+        nearTermForecast: 0,
+        longTermForecast: 0,
+        lastTickProbability: 0,
+        possibleInversionDetected: false,
+        debugLog: '',
     }));
 }
 
-/** @param {NS} ns **/
+/** 刷新所有股票数据（价格、持仓等）
+ * @param {NS} ns
+ * @param {boolean} has4s - 是否拥有 4S 数据访问权限
+ * @param {Object[]} allStocks - 所有股票对象数组
+ * @param {Object[]} myStocks - 当前持仓股票数组（会被原地修改）
+ * @returns {number} 总持仓市值 */
 async function refresh(ns, has4s, allStocks, myStocks) {
     let holdings = 0;
 
-    // Dodge hefty RAM requirements by spawning a sequence of temporary scripts to collect info for us one function at a time
+    // 批量获取股票数据（按顺序调用以避免 RAM 问题）
     const dictAskPrices = await getStockInfoDict(ns, 'getAskPrice');
     const dictBidPrices = await getStockInfoDict(ns, 'getBidPrice');
     const dictVolatilities = !has4s ? null : await getStockInfoDict(ns, 'getVolatility');
     const dictForecasts = !has4s ? null : await getStockInfoDict(ns, 'getForecast');
     const dictPositions = mock ? null : await getStockInfoDict(ns, 'getPosition');
-    const ticked = allStocks.some(stk => stk.ask_price != dictAskPrices[stk.sym]); // If any price has changed since our last update, the stock market has "ticked"
+
+    // 检测是否有价格变动（意味着股票市场发生了 tick）
+    const ticked = allStocks.some(stk => stk.ask_price !== dictAskPrices[stk.sym]);
 
     if (ticked) {
-        if (Date.now() - lastTick < expectedTickTime - sleepInterval) {
-            if (Date.now() - lastTick < catchUpTickTime - sleepInterval) {
-                let changedPrices = allStocks.filter(stk => stk.ask_price != dictAskPrices[stk.sym]);
-                log(ns, `WARNING: Detected a stock market tick after only ${formatDuration(Date.now() - lastTick)}, but expected ~${formatDuration(expectedTickTime)}. ` +
-                    (changedPrices.length >= 33 ? '(All stocks updated)' : `The following ${changedPrices.length} stock prices changed: ${changedPrices.map(stk =>
-                        `${stk.sym} ${formatMoney(stk.ask_price)} -> ${formatMoney(dictAskPrices[stk.sym])}`).join(", ")}`), false, 'warning');
-            } else
-                log(ns, `INFO: Detected a rapid stock market tick (${formatDuration(Date.now() - lastTick)}), likely to make up for lag / offline time.`)
+        const elapsed = Date.now() - lastTick;
+        if (elapsed < EXPECTED_TICK_TIME - SLEEP_INTERVAL) {
+            if (elapsed < CATCH_UP_TICK_TIME - SLEEP_INTERVAL) {
+                let changedPrices = allStocks.filter(stk => stk.ask_price !== dictAskPrices[stk.sym]);
+                log(ns, `WARNING: 检测到股票市场 tick 间隔仅 ${formatDuration(elapsed)}，` +
+                    `预期 ~${formatDuration(EXPECTED_TICK_TIME)}。` +
+                    (changedPrices.length >= 33 ? '(所有股票已更新)' :
+                        `以下 ${changedPrices.length} 只股票价格变动：${changedPrices.map(stk =>
+                            `${stk.sym} ${formatMoney(stk.ask_price)} -> ${formatMoney(dictAskPrices[stk.sym])}`).join(", ")}`),
+                    false, 'warning');
+            } else {
+                log(ns, `INFO: 检测到快速股票市场 tick (${formatDuration(elapsed)})，可能是追赶离线时间。`);
+            }
         }
-        lastTick = Date.now()
+        lastTick = Date.now();
     }
 
+    // 更新所有股票的当前数据
     myStocks.length = 0;
     for (const stk of allStocks) {
         const sym = stk.sym;
-        stk.ask_price = dictAskPrices[sym]; // The amount we would pay if we bought the stock (higher than 'price')
-        stk.bid_price = dictBidPrices[sym]; // The amount we would recieve if we sold the stock (lower than 'price')
+        stk.ask_price = dictAskPrices[sym];
+        stk.bid_price = dictBidPrices[sym];
         stk.spread = stk.ask_price - stk.bid_price;
-        stk.spread_pct = stk.spread / stk.ask_price; // The percentage of value we lose just by buying the stock
-        stk.price = (stk.ask_price + stk.bid_price) / 2; // = ns.stock.getPrice(sym);
+        stk.spread_pct = stk.spread / stk.ask_price;
+        stk.price = (stk.ask_price + stk.bid_price) / 2;
         stk.vol = has4s ? dictVolatilities[sym] : stk.vol;
         stk.prob = has4s ? dictForecasts[sym] : stk.prob;
-        stk.probStdDev = has4s ? 0 : stk.probStdDev; // Standard deviation around the est. probability
-        // Update our current portfolio of owned stock
+        stk.probStdDev = has4s ? 0 : stk.probStdDev;
+
+        // 更新持仓信息
         let [priorLong, priorShort] = [stk.sharesLong, stk.sharesShort];
         stk.position = mock ? null : dictPositions[sym];
-        stk.sharesLong = mock ? (stk.sharesLong || 0) : stk.position[0];
-        stk.boughtPrice = mock ? (stk.boughtPrice || 0) : stk.position[1];
-        stk.sharesShort = mock ? (stk.shares_short || 0) : stk.position[2];
-        stk.boughtPriceShort = mock ? (stk.boughtPrice_short || 0) : stk.position[3];
-        holdings += stk.positionValue();
-        if (stk.owned()) myStocks.push(stk); else stk.ticksHeld = 0;
-        if (ticked) // Increment ticksHeld, or reset it if we have no position in this stock or reversed our position last tick.
-            stk.ticksHeld = !stk.owned() || (priorLong > 0 && stk.sharesLong == 0) || (priorShort > 0 && stk.sharesShort == 0) ? 0 : 1 + (stk.ticksHeld || 0);
+        stk.sharesLong = mock ? (stk.sharesLong || 0) : (stk.position ? stk.position[0] : 0);
+        stk.boughtPrice = mock ? (stk.boughtPrice || 0) : (stk.position ? stk.position[1] : 0);
+        stk.sharesShort = mock ? (stk.sharesShort || 0) : (stk.position ? stk.position[2] : 0);
+        stk.boughtPriceShort = mock ? (stk.boughtPriceShort || 0) : (stk.position ? stk.position[3] : 0);
+        holdings += getPositionValue(stk);
+
+        if (hasPosition(stk)) myStocks.push(stk);
+        else stk.ticksHeld = 0;
+
+        if (ticked) {
+            // 更新持有时长
+            stk.ticksHeld = !hasPosition(stk)
+                || (priorLong > 0 && stk.sharesLong === 0)
+                || (priorShort > 0 && stk.sharesShort === 0)
+                ? 0 : 1 + (stk.ticksHeld || 0);
+        }
     }
-    if (ticked) await updateForecast(ns, allStocks, has4s); // Logic below only required on market tick
+
+    if (ticked) await updateForecast(ns, allStocks, has4s);
     return holdings;
 }
 
-// Historical probability can be inferred from the number of times the stock was recently observed increasing over the total number of observations
-const forecast = history => history.reduce((ups, price, idx) => idx == 0 ? 0 : (history[idx - 1] > price ? ups + 1 : ups), 0) / (history.length - 1);
-// An "inversion" can be detected if two probabilities are far enough apart and are within "tolerance" of p1 being equal to 1-p2
-const tol2 = inversionDetectionTolerance / 2;
-const detectInversion = (p1, p2) => ((p1 >= 0.5 + tol2) && (p2 <= 0.5 - tol2) && p2 <= (1 - p1) + inversionDetectionTolerance)
-        /* Reverse Condition: */ || ((p1 <= 0.5 - tol2) && (p2 >= 0.5 + tol2) && p2 >= (1 - p1) - inversionDetectionTolerance);
+// ============================================================
+// 预测相关函数
+// ============================================================
 
-/** @param {NS} ns **/
+/**
+ * 基于历史价格计算股票上涨概率。
+ * 优化：使用简单 for 循环替代 reduce，减少函数调用开销。
+ * @param {number[]} history - 价格历史数组（索引 0 为最新价格）
+ * @returns {number} 上涨比例（0~1）
+ */
+function forecast(history) {
+    const len = history.length;
+    if (len < 2) return 0.5; // 数据不足时返回中性概率
+    let ups = 0;
+    // 遍历相邻价格对，统计上涨次数
+    for (let i = 1; i < len; i++) {
+        if (history[i - 1] > history[i]) ups++;
+    }
+    return ups / (len - 1);
+}
+
+// 反转检测的容忍度常量
+const TOL_HALF = INVERSION_DETECTION_TOLERANCE / 2;
+
+/**
+ * 检测两只股票的概率是否发生了反转（概率 p 变为 1-p）。
+ * @param {number} p1 - 长期概率
+ * @param {number} p2 - 短期概率
+ * @returns {boolean} 是否检测到反转
+ */
+function detectInversion(p1, p2) {
+    return (p1 >= 0.5 + TOL_HALF && p2 <= 0.5 - TOL_HALF && p2 <= (1 - p1) + INVERSION_DETECTION_TOLERANCE)
+        || (p1 <= 0.5 - TOL_HALF && p2 >= 0.5 + TOL_HALF && p2 >= (1 - p1) - INVERSION_DETECTION_TOLERANCE);
+}
+
+/** 更新预测数据（合并了原来的多个循环为两个高效遍历）
+ * @param {NS} ns
+ * @param {Object[]} allStocks
+ * @param {boolean} has4s */
 async function updateForecast(ns, allStocks, has4s) {
     const currentHistory = allStocks[0].priceHistory.length;
-    const prepSummary = showMarketSummary || mock || (!has4s && (currentHistory < minTickHistory || allStocks.filter(stk => stk.owned()).length == 0)); // Decide whether to display the market summary table.
-    const inversionsDetected = []; // Keep track of individual stocks whose probability has inverted (45% chance of happening each "cycle")
-    detectedCycleTick = (detectedCycleTick + 1) % marketCycleLength; // Keep track of stock market cycle (which occurs every 75 ticks)
+    const prepSummary = showMarketSummary || mock
+        || (!has4s && (currentHistory < minTickHistory
+            || allStocks.filter(stk => hasPosition(stk)).length === 0));
+
+    const inversionsDetected = []; // 收集发生反转的股票
+    detectedCycleTick = (detectedCycleTick + 1) % MARKET_CYCLE_LENGTH;
+
+    // ── 第一遍遍历：更新价格历史、波动率、预测、检测反转 ──
     for (const stk of allStocks) {
+        // 价格历史（unshift 添加最新价格到头部）
         stk.priceHistory.unshift(stk.price);
-        if (stk.priceHistory.length > maxTickHistory) // Limit the rolling window size
-            stk.priceHistory.splice(maxTickHistory, 1);
-        // Volatility is easy - the largest observed % movement in a single tick
-        if (!has4s) stk.vol = stk.priceHistory.reduce((max, price, idx) => Math.max(max, idx == 0 ? 0 : Math.abs(stk.priceHistory[idx - 1] - price) / price), 0);
-        // We want stocks that have the best expected return, averaged over a long window for greater precision, but the game will occasionally invert probabilities
-        // (45% chance every 75 updates), so we also compute a near-term forecast window to allow for early-detection of inversions so we can ditch our position.
+        if (stk.priceHistory.length > MAX_TICK_HISTORY)
+            stk.priceHistory.splice(MAX_TICK_HISTORY, 1);
+
+        // 计算波动率（单 tick 内最大百分比变动）
+        if (!has4s) {
+            let maxVol = 0;
+            const hist = stk.priceHistory;
+            for (let i = 1; i < hist.length; i++) {
+                const movement = Math.abs(hist[i - 1] - hist[i]) / hist[i];
+                if (movement > maxVol) maxVol = movement;
+            }
+            stk.vol = maxVol;
+        }
+
+        // 近期预测（短期窗口）
         stk.nearTermForecast = forecast(stk.priceHistory.slice(0, nearTermForecastWindowLength));
-        let preNearTermWindowProb = forecast(stk.priceHistory.slice(nearTermForecastWindowLength, nearTermForecastWindowLength + marketCycleLength)); // Used to detect the probability before the potential inversion event.
-        // Detect whether it appears as though the probability of this stock has recently undergone an inversion (i.e. prob => 1 - prob)
-        stk.possibleInversionDetected = has4s ? detectInversion(stk.prob, stk.lastTickProbability || stk.prob) : detectInversion(preNearTermWindowProb, stk.nearTermForecast);
+
+        // 反转检测：对比反转前的概率与近期概率
+        let preNearTermWindowProb = forecast(
+            stk.priceHistory.slice(nearTermForecastWindowLength,
+                nearTermForecastWindowLength + MARKET_CYCLE_LENGTH)
+        );
+        stk.possibleInversionDetected = has4s
+            ? detectInversion(stk.prob, stk.lastTickProbability || stk.prob)
+            : detectInversion(preNearTermWindowProb, stk.nearTermForecast);
         stk.lastTickProbability = stk.prob;
+ 
         if (stk.possibleInversionDetected) inversionsDetected.push(stk);
     }
-    // Detect whether our auto-detected "stock market cycle" timing should be adjusted based on the number of potential inversions observed
+
+    // ── 处理反转检测结果，调整市场周期 ──
     let summary = "";
     if (inversionsDetected.length > 0) {
-        summary += `${inversionsDetected.length} Stocks appear to be reversing their outlook: ${inversionsDetected.map(s => s.sym).join(', ')} (threshold: ${inversionAgreementThreshold})\n`;
-        if (inversionsDetected.length >= inversionAgreementThreshold && (has4s || currentHistory >= minTickHistory)) { // We believe we have detected the stock market cycle!
-            const newPredictedCycleTick = has4s ? 0 : nearTermForecastWindowLength; // By the time we've detected it, we're this many ticks past the cycle start
-            if (detectedCycleTick != newPredictedCycleTick)
-                log(ns, `Threshold for changing predicted market cycle met (${inversionsDetected.length} >= ${inversionAgreementThreshold}). ` +
-                    `Changing current market tick from ${detectedCycleTick} to ${newPredictedCycleTick}.`);
+        summary += `${inversionsDetected.length} 只股票出现趋势反转: ${inversionsDetected.map(s => s.sym).join(', ')} ` +
+            `(阈值: ${inversionAgreementThreshold})\n`;
+        if (inversionsDetected.length >= inversionAgreementThreshold
+            && (has4s || currentHistory >= minTickHistory)) {
+            const newPredictedCycleTick = has4s ? 0 : nearTermForecastWindowLength;
+            if (detectedCycleTick !== newPredictedCycleTick)
+                log(ns, `检测到市场周期变更条件已满足 (${inversionsDetected.length} >= ${inversionAgreementThreshold})。` +
+                    `将当前市场 tick 从 ${detectedCycleTick} 更改为 ${newPredictedCycleTick}。`);
             marketCycleDetected = true;
             detectedCycleTick = newPredictedCycleTick;
-            // Don't adjust this in the future unless we see another day with as much or even more agreement (capped at 14, it seems sometimes our cycles get out of sync with
-            // actual cycles and we need to reset our clock even after previously determining the cycle with great certainty.)
+            // 提高阈值，防止未来误判（上限 14）
             inversionAgreementThreshold = Math.max(14, inversionsDetected.length);
         }
     }
-    // Act on any inversions (if trusted), compute the probability, and prepare the stock summary
+
+    // ── 第二遍遍历：应用反转、计算概率、生成调试摘要 ──
     for (const stk of allStocks) {
-        // Don't "trust" (act on) a detected inversion unless it's near the time when we're capable of detecting market cycle start. Avoids most false-positives.
-        if (stk.possibleInversionDetected && (has4s && detectedCycleTick == 0 ||
-            (!has4s && (detectedCycleTick >= nearTermForecastWindowLength / 2) && (detectedCycleTick <= nearTermForecastWindowLength + inversionLagTolerance))))
-            stk.lastInversion = detectedCycleTick; // If we "trust" a probability inversion has occurred, probability will be calculated based on only history since the last inversion.
-        else
+        // 判断是否信任本次反转检测
+        if (stk.possibleInversionDetected && (
+            has4s && detectedCycleTick === 0 ||
+            (!has4s && detectedCycleTick >= nearTermForecastWindowLength / 2
+                && detectedCycleTick <= nearTermForecastWindowLength + INVERSION_LAG_TOLERANCE))) {
+            stk.lastInversion = detectedCycleTick;
+        } else {
             stk.lastInversion++;
-        // Only take the stock history since after the last inversion to compute the probability of the stock.
+        }
+
+        // 基于反转后的价格历史计算长期概率
         const probWindowLength = Math.min(longTermForecastWindowLength, stk.lastInversion);
         stk.longTermForecast = forecast(stk.priceHistory.slice(0, probWindowLength));
         if (!has4s) {
             stk.prob = stk.longTermForecast;
             stk.probStdDev = Math.sqrt((stk.prob * (1 - stk.prob)) / probWindowLength);
         }
-        const signalStrength = 1 + (stk.bullish() ? (stk.nearTermForecast > stk.prob ? 1 : 0) + (stk.prob > 0.8 ? 1 : 0) : (stk.nearTermForecast < stk.prob ? 1 : 0) + (stk.prob < 0.2 ? 1 : 0));
-        if (prepSummary) { // Example: AERO  ++   Prob: 54% (t51: 54%, t10: 67%) tLast⇄:190 Vol:0.640% ER: 2.778BP Spread:1.784% ttProfit: 65 Pos: 14.7M long  (held 189 ticks)
-            stk.debugLog = `${stk.sym.padEnd(5, ' ')} ${(stk.bullish() ? '+' : '-').repeat(signalStrength).padEnd(3)} ` +
+
+        // 信号强度（用于可视化）
+        const signalStrength = 1
+            + (isBullish(stk) ? (stk.nearTermForecast > stk.prob ? 1 : 0) + (stk.prob > 0.8 ? 1 : 0)
+                : (stk.nearTermForecast < stk.prob ? 1 : 0) + (stk.prob < 0.2 ? 1 : 0));
+
+        if (prepSummary) {
+            stk.debugLog = `${stk.sym.padEnd(5, '\xA0')} ${(isBullish(stk) ? '+' : '-').repeat(signalStrength).padEnd(3)} ` +
                 `Prob:${(stk.prob * 100).toFixed(0).padStart(3)}% (t${probWindowLength.toFixed(0).padStart(2)}:${(stk.longTermForecast * 100).toFixed(0).padStart(3)}%, ` +
                 `t${Math.min(stk.priceHistory.length, nearTermForecastWindowLength).toFixed(0).padStart(2)}:${(stk.nearTermForecast * 100).toFixed(0).padStart(3)}%) ` +
-                `tLast⇄:${(stk.lastInversion + 1).toFixed(0).padStart(3)} Vol:${(stk.vol * 100).toFixed(2)}% ER:${formatBP(stk.expectedReturn()).padStart(8)} ` +
-                `Spread:${(stk.spread_pct * 100).toFixed(2)}% ttProfit:${stk.blackoutWindow().toFixed(0).padStart(3)}`;
-            if (stk.owned()) stk.debugLog += ` Pos: ${formatNumberShort(stk.ownedShares(), 3, 1)} (${stk.ownedShares() == stk.maxShares ? 'max' :
-                ((100 * stk.ownedShares() / stk.maxShares).toFixed(0).padStart(2) + '%')}) ${stk.sharesLong > 0 ? 'long ' : 'short'} (held ${stk.ticksHeld} ticks)`;
+                `tLast⇄:${(stk.lastInversion + 1).toFixed(0).padStart(3)} Vol:${(stk.vol * 100).toFixed(2)}% ER:${formatBP(calcExpectedReturn(stk)).padStart(8)} ` +
+                `Spread:${(stk.spread_pct * 100).toFixed(2)}% ttProfit:${getBlackoutWindow(stk).toFixed(0).padStart(3)}`;
+            if (hasPosition(stk))
+                stk.debugLog += ` Pos: ${formatNumberShort(getOwnedShares(stk), 3, 1)} (${getOwnedShares(stk) == stk.maxShares ? 'max' :
+                    ((100 * getOwnedShares(stk) / stk.maxShares).toFixed(0).padStart(2) + '%')}) ${stk.sharesLong > 0 ? 'long ' : 'short'} (held ${stk.ticksHeld} ticks)`;
             if (stk.possibleInversionDetected) stk.debugLog += ' ⇄⇄⇄';
         }
     }
-    // Print a summary of stocks as of this most recent tick (if enabled)
+
+    // 生成并输出市场摘要
     if (prepSummary) {
-        summary += `Market day ${detectedCycleTick + 1}${marketCycleDetected ? '' : '?'} of ${marketCycleLength} (${marketCycleDetected ? (100 * inversionAgreementThreshold / 19).toPrecision(2) : '0'}% certain) ` +
-            `Current Stock Summary and Pre-4S Forecasts (by best payoff-time):\n` + allStocks.sort(purchaseOrder).map(s => s.debugLog).join("\n")
+        summary += `市场第 ${detectedCycleTick + 1}${marketCycleDetected ? '' : '?'}/${MARKET_CYCLE_LENGTH} 天 ` +
+            `(${marketCycleDetected ? (100 * inversionAgreementThreshold / 19).toPrecision(2) : '0'}% 确定) ` +
+            `当前股票摘要与预 4S 预测（按回本时间排序）：\n` +
+            allStocks.sort((a, b) =>
+                (Math.ceil(getTimeToCoverSpread(a)) - Math.ceil(getTimeToCoverSpread(b)))
+                || (calcAbsReturn(b) - calcAbsReturn(a))
+            ).map(s => s.debugLog).join("\n");
         if (showMarketSummary) await updateForecastFile(ns, summary); else log(ns, summary);
     }
-    // Write out a file of stock probabilities so that other scripts can make use of this (e.g. hack orchestrator can manipulate the stock market)
+
+    // 输出股票概率文件供其他脚本使用（如 hack 编排器可据此操纵市场）
     await ns.write('/Temp/stock-probabilities.txt', JSON.stringify(Object.fromEntries(
-        allStocks.map(stk => [stk.sym, { prob: stk.prob, sharesLong: stk.sharesLong, sharesShort: stk.sharesShort }]))), "w");
+        allStocks.map(stk => [stk.sym, {
+            prob: stk.prob,
+            sharesLong: stk.sharesLong,
+            sharesShort: stk.sharesShort
+        }]))), "w");
 }
 
-// Helpers to display the stock market summary in a separate window.
+// ============================================================
+// 市场摘要窗口
+// ============================================================
+
 let summaryFile = '/Temp/stockmarket-summary.txt';
 let updateForecastFile = async (ns, summary) => await ns.write(summaryFile, summary, 'w');
+
+/** 启动独立的市场摘要显示窗口 */
 let launchSummaryTail = async ns => {
     let summaryTailScript = summaryFile.replace('.txt', '-tail.js');
-    if (await getNsDataThroughFile(ns, `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`, '/Temp/stockmarket-summary-is-running.txt'))
+    if (await getNsDataThroughFile(ns,
+        `ns.scriptRunning('${summaryTailScript}', ns.getHostname())`,
+        '/Temp/stockmarket-summary-is-running.txt'))
         return;
-    //await getNsDataThroughFile(ns, `ns.scriptKill('${summaryTailScript}', ns.getHostname())`, summaryTailScript.replace('.js', '-kill.js')); // Only needed if we're changing the script below
     await runCommand(ns, `ns.disableLog('sleep'); tail(ns); let lastRead = '';
         while (true) {
             let read = ns.read('${summaryFile}');
             if (lastRead != read) ns.print(lastRead = read);
             await ns.sleep(1000);
         }`, summaryTailScript);
+};
+
+// ============================================================
+// 交易函数
+// ============================================================
+
+/** 执行股票交易（通过临时脚本规避 2.5GB RAM 开销）
+ * @param {NS} ns
+ * @param {string} sym - 股票代码
+ * @param {number} numShares - 股数
+ * @param {string} action - 交易动作 ('buyStock'|'buyShort'|'sellStock'|'sellShort') */
+async function transactStock(ns, sym, numShares, action) {
+    return await getNsDataThroughFile(ns,
+        `ns.stock.${action}(ns.args[0], ns.args[1])`, null, [sym, numShares]);
 }
 
-// Ram-dodging helpers that spawn temporary scripts to buy/sell rather than pay 2.5GB ram per variant
-let buyStockWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'buyStock'); // ns.stock.buyStock(sym, numShares);
-let buyShortWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'buyShort'); // ns.stock.buyShort(sym, numShares);
-let sellStockWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'sellStock'); // ns.stock.sellStock(sym, numShares);
-let sellShortWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'sellShort'); // ns.stock.sellShort(sym, numShares);
-let transactStock = async (ns, sym, numShares, action) =>
-    await getNsDataThroughFile(ns, `ns.stock.${action}(ns.args[0], ns.args[1])`, null, [sym, numShares]);
-
-/** @param {NS} ns
- * Automatically buys either a short or long position depending on the outlook of the stock. */
+/** 买入股票（根据看涨/看跌自动选择做多或做空）
+ * @param {NS} ns
+ * @param {Object} stk - 股票对象
+ * @param {number} sharesToBuy - 要买入的股数
+ * @returns {number} 交易花费金额 */
 async function doBuy(ns, stk, sharesToBuy) {
-    // We include -2*commission in the "holdings value" of our stock, but if we make repeated purchases of the same stock, we have to track
-    // the additional commission somewhere. So only subtract it from our running profit if this isn't our first purchase of this symbol
-    if (stk.owned())
+    // 非首次购买同一股票时，额外佣金从累计利润中扣除
+    if (hasPosition(stk))
         totalProfit -= commission;
-    let long = stk.bullish();
-    let expectedPrice = long ? stk.ask_price : stk.bid_price; // Depends on whether we will be buying a long or short position
-    log(ns, `INFO: ${long ? 'Buying  ' : 'Shorting'} ${formatNumberShort(sharesToBuy, 3, 3).padStart(5)} (` +
-        `${stk.maxShares == sharesToBuy + stk.ownedShares() ? '@max shares' : `${formatNumberShort(sharesToBuy + stk.ownedShares(), 3, 3).padStart(5)}/${formatNumberShort(stk.maxShares, 3, 3).padStart(5)}`}) ` +
-        `${stk.sym.padEnd(5)} @ ${formatMoney(expectedPrice).padStart(9)} for ${formatMoney(sharesToBuy * expectedPrice).padStart(9)} (Spread:${(stk.spread_pct * 100).toFixed(2)}% ` +
-        `ER:${formatBP(stk.expectedReturn()).padStart(8)}) Ticks to Profit: ${stk.timeToCoverTheSpread().toFixed(2)}`, noisy, 'info');
+
+    let long = isBullish(stk);
+    let expectedPrice = long ? stk.ask_price : stk.bid_price;
+    log(ns, `INFO: ${long ? '买入  ' : '做空  '} ${formatNumberShort(sharesToBuy, 3, 3).padStart(5)} (` +
+        `${stk.maxShares == sharesToBuy + getOwnedShares(stk) ? '@已达上限' :
+            `${formatNumberShort(sharesToBuy + getOwnedShares(stk), 3, 3).padStart(5)}/${formatNumberShort(stk.maxShares, 3, 3).padStart(5)}`}) ` +
+        `${stk.sym.padEnd(5)} @ ${formatMoney(expectedPrice).padStart(9)} 总额 ${formatMoney(sharesToBuy * expectedPrice).padStart(9)} ` +
+        `(价差:${(stk.spread_pct * 100).toFixed(2)}% ER:${formatBP(calcExpectedReturn(stk)).padStart(8)}) ` +
+        `回本 tick: ${getTimeToCoverSpread(stk).toFixed(2)}`, noisy, 'info');
+
     let price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort'));
-    // The rest of this work is for troubleshooting / mock-mode purposes
-    if (price == 0) {
+
+    if (price === 0) {
         const playerMoney = (await getPlayerInfo(ns)).money;
         if (playerMoney < sharesToBuy * expectedPrice)
-            log(ns, `WARN: Failed to ${long ? 'buy' : 'short'} ${stk.sym} because money just recently dropped to ${formatMoney(playerMoney)} and we can no longer afford it.`, noisy);
+            log(ns, `WARN: ${long ? '买入' : '做空'} ${stk.sym} 失败，资金不足 (${formatMoney(playerMoney)})。`, noisy);
         else
-            log(ns, `ERROR: Failed to ${long ? 'buy' : 'short'} ${stk.sym} @ ${formatMoney(expectedPrice)} (0 was returned) despite having ${formatMoney(playerMoney)}.`, true, 'error');
+            log(ns, `ERROR: ${long ? '买入' : '做空'} ${stk.sym} @ ${formatMoney(expectedPrice)} 返回 0，` +
+                `但资金为 ${formatMoney(playerMoney)}。`, true, 'error');
         return 0;
-    } else if (price != expectedPrice) {
-        log(ns, `WARNING: ${long ? 'Bought' : 'Shorted'} ${stk.sym} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
-        price = expectedPrice; // Known Bitburner bug for now, short returns "price" instead of "bid_price". Correct this so running profit calcs are correct.
+    } else if (price !== expectedPrice) {
+        log(ns, `WARNING: ${long ? '买入' : '做空'} ${stk.sym} @ ${formatMoney(price)}，` +
+            `预期 ${formatMoney(expectedPrice)} (价差: ${formatMoney(stk.spread)})`, false, 'warning');
+        price = expectedPrice; // Bitburner 已知 bug：做空返回"price"而非"bid_price"
     }
-    if (mock && long) stk.boughtPrice = (stk.boughtPrice * stk.sharesLong + price * sharesToBuy) / (stk.sharesLong + sharesToBuy);
-    if (mock && !long) stk.boughtPriceShort = (stk.boughtPriceShort * stk.sharesShort + price * sharesToBuy) / (stk.sharesShort + sharesToBuy);
-    if (long) stk.sharesLong += sharesToBuy; else stk.sharesShort += sharesToBuy; // Maintained for mock mode, otherwise, redundant (overwritten at next refresh)
-    return sharesToBuy * price + commission; // Return the amount spent on the transaction so it can be subtracted from our cash on hand
+
+    // 模拟模式下更新持仓
+    if (mock && long)
+        stk.boughtPrice = (stk.boughtPrice * stk.sharesLong + price * sharesToBuy) / (stk.sharesLong + sharesToBuy);
+    if (mock && !long)
+        stk.boughtPriceShort = (stk.boughtPriceShort * stk.sharesShort + price * sharesToBuy) / (stk.sharesShort + sharesToBuy);
+
+    if (long) stk.sharesLong += sharesToBuy;
+    else stk.sharesShort += sharesToBuy;
+
+    return sharesToBuy * price + commission;
 }
 
-/** @param {NS} ns
- * Sell our current position in this stock. */
+/** 卖出当前持仓
+ * @param {NS} ns
+ * @param {Object} stk - 股票对象
+ * @returns {number} 交易收回金额 */
 async function doSellAll(ns, stk) {
     let long = stk.sharesLong > 0;
-    if (long && stk.sharesShort > 0) // Detect any issues here - we should always sell one before buying the other.
-        log(ns, `ERROR: Somehow ended up both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}`, true, 'error');
-    let expectedPrice = long ? stk.bid_price : stk.ask_price; // Depends on whether we will be selling a long or short position
+    if (long && stk.sharesShort > 0)
+        log(ns, `ERROR: 异常状态 - ${stk.sym} 同时持有 ${stk.sharesShort} 空头和 ${stk.sharesLong} 多头`, true, 'error');
+
+    let expectedPrice = long ? stk.bid_price : stk.ask_price;
     let sharesSold = long ? stk.sharesLong : stk.sharesShort;
     let price = mock ? expectedPrice : await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort');
-    const profit = (long ? stk.sharesLong * (price - stk.boughtPrice) : stk.sharesShort * (stk.boughtPriceShort - price)) - 2 * commission;
-    log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
-        `@ ${formatMoney(price).padStart(9)} for a ` + (profit > 0 ? `PROFIT of ${formatMoney(profit).padStart(9)}` : ` LOSS  of ${formatMoney(-profit).padStart(9)}`) + ` after ${stk.ticksHeld} ticks`,
+
+    const profit = (long
+        ? stk.sharesLong * (price - stk.boughtPrice)
+        : stk.sharesShort * (stk.boughtPriceShort - price)) - 2 * commission;
+
+    log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: 卖出 ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ` +
+        `${stk.sym.padEnd(5)} ${long ? ' 多头' : ' 空头'} @ ${formatMoney(price).padStart(9)}，` +
+        (profit > 0 ? `盈利 ${formatMoney(profit).padStart(9)}` : `亏损 ${formatMoney(-profit).padStart(9)}`) +
+        ` (持有 ${stk.ticksHeld} tick)`,
         noisy, noisy ? (profit > 0 ? 'success' : 'error') : undefined);
-    if (price == 0) {
-        log(ns, `ERROR: Failed to sell ${sharesSold} ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(expectedPrice)} - 0 was returned.`, true, 'error');
+
+    if (price === 0) {
+        log(ns, `ERROR: 卖出 ${sharesSold} 股 ${stk.sym} ${long ? '多头' : '空头'} ` +
+            `@ ${formatMoney(expectedPrice)} 失败 - 返回 0。`, true, 'error');
         return 0;
-    } else if (price != expectedPrice) {
-        log(ns, `WARNING: Sold ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
-        price = expectedPrice; // Known Bitburner bug for now, sellSort returns "price" instead of "ask_price". Correct this so running profit calcs are correct.
+    } else if (price !== expectedPrice) {
+        log(ns, `WARNING: 卖出 ${stk.sym} ${long ? '多头' : '空头'} @ ${formatMoney(price)}，` +
+            `预期 ${formatMoney(expectedPrice)} (价差: ${formatMoney(stk.spread)})`, false, 'warning');
+        price = expectedPrice;
     }
-    if (long) stk.sharesLong -= sharesSold; else stk.sharesShort -= sharesSold; // Maintained for mock mode, otherwise, redundant (overwritten at next refresh)
+
+    if (long) stk.sharesLong -= sharesSold;
+    else stk.sharesShort -= sharesSold;
+
     totalProfit += profit;
-    return price * sharesSold - commission; // Return the amount of money recieved from the transaction
+    return price * sharesSold - commission;
 }
 
-let formatBP = fraction => formatNumberShort(fraction * 100 * 100, 3, 2) + " BP";
+// ============================================================
+// 格式化与日志
+// ============================================================
 
-/** Log / tprint / toast helper.
+/** 格式化为基点 (Basis Points) */
+let formatBP = fraction => formatNumberShort(fraction * 100 * 100, 3, 2) + "\u202FBP";
+
+/** 日志输出辅助函数（支持 print / tprint / toast）
  * @param {NS} ns */
 let log = (ns, message, tprint = false, toastStyle = "") => {
-    if (message == lastLog) return;
+    if (message === lastLog) return;
     ns.print(message);
     if (tprint) ns.tprint(message);
     if (toastStyle) ns.toast(message, toastStyle);
     return lastLog = message;
-}
+};
 
+/** 更新状态显示（包括 HUD）
+ * @param {NS} ns */
 function doStatusUpdate(ns, stocks, myStocks, hudElement = null) {
-    let maxReturnBP = 10000 * Math.max(...myStocks.map(s => s.absReturn())); // The largest return (in basis points) in our portfolio
-    let minReturnBP = 10000 * Math.min(...myStocks.map(s => s.absReturn())); // The smallest return (in basis points) in our portfolio
-    let est_holdings_cost = myStocks.reduce((sum, stk) => sum + (stk.owned() ? commission : 0) +
+    let maxReturnBP = 10000 * Math.max(...myStocks.map(s => calcAbsReturn(s)));
+    let minReturnBP = 10000 * Math.min(...myStocks.map(s => calcAbsReturn(s)));
+    let estHoldingsCost = myStocks.reduce((sum, stk) => sum + (hasPosition(stk) ? commission : 0) +
         stk.sharesLong * stk.boughtPrice + stk.sharesShort * stk.boughtPriceShort, 0);
-    let liquidation_value = myStocks.reduce((sum, stk) => sum - (stk.owned() ? commission : 0) + stk.positionValue(), 0);
-    let status = `Long ${myStocks.filter(s => s.sharesLong > 0).length}, Short ${myStocks.filter(s => s.sharesShort > 0).length} of ${stocks.length} stocks ` +
-        (myStocks.length == 0 ? '' : `(ER ${minReturnBP.toFixed(1)}-${maxReturnBP.toFixed(1)} BP) `) +
-        `Profit: ${formatMoney(totalProfit, 3)} Holdings: ${formatMoney(liquidation_value, 3)} (Cost: ${formatMoney(est_holdings_cost, 3)}) ` +
-        `Net: ${formatMoney(totalProfit + liquidation_value - est_holdings_cost, 3)}`
+    let liquidationValue = myStocks.reduce((sum, stk) => sum - (hasPosition(stk) ? commission : 0) + getPositionValue(stk), 0);
+    let status = `多头 ${myStocks.filter(s => s.sharesLong > 0).length}, 空头 ${myStocks.filter(s => s.sharesShort > 0).length} / ${stocks.length} 只股票 ` +
+        (myStocks.length === 0 ? '' : `(ER ${minReturnBP.toFixed(1)}-${maxReturnBP.toFixed(1)} BP) `) +
+        `累计利润: ${formatMoney(totalProfit, 3)} 持仓: ${formatMoney(liquidationValue, 3)} ` +
+        `(成本: ${formatMoney(estHoldingsCost, 3)}) 净收益: ${formatMoney(totalProfit + liquidationValue - estHoldingsCost, 3)}`;
     log(ns, status);
-    if (hudElement) hudElement.innerText = formatMoney(liquidation_value, 6, 3);
+    if (hudElement) hudElement.innerText = formatMoney(liquidationValue, 6, 3);
 }
 
-/** @param {NS} ns **/
+// ============================================================
+// 清算与 API 购买
+// ============================================================
+
+/** 清算所有持仓
+ * @param {NS} ns **/
 async function liquidate(ns) {
     allStockSymbols ??= await getStockSymbols(ns);
-    if (allStockSymbols == null) return; // Nothing to liquidate, no API Access
+    if (allStockSymbols == null) return;
+
     let totalStocks = 0, totalSharesLong = 0, totalSharesShort = 0, totalRevenue = 0;
     const dictPositions = mock ? null : await getStockInfoDict(ns, 'getPosition');
+
     for (const sym of allStockSymbols) {
         var [sharesLong, , sharesShort, avgShortCost] = dictPositions[sym];
-        if (sharesLong + sharesShort == 0) continue;
-        totalStocks++, totalSharesLong += sharesLong, totalSharesShort += sharesShort;
-        if (sharesLong > 0) totalRevenue += (await sellStockWrapper(ns, sym, sharesLong)) * sharesLong - commission;
-        if (sharesShort > 0) totalRevenue += (2 * avgShortCost - (await sellShortWrapper(ns, sym, sharesShort))) * sharesShort - commission;
+        if (sharesLong + sharesShort === 0) continue;
+        totalStocks++;
+        totalSharesLong += sharesLong;
+        totalSharesShort += sharesShort;
+        if (sharesLong > 0) totalRevenue += (await transactStock(ns, sym, sharesLong, 'sellStock')) * sharesLong - commission;
+        if (sharesShort > 0) totalRevenue += (2 * avgShortCost - await transactStock(ns, sym, sharesShort, 'sellShort')) * sharesShort - commission;
     }
-    log(ns, `Sold ${totalSharesLong.toLocaleString('en')} long shares and ${totalSharesShort.toLocaleString('en')} short shares ` +
-        `in ${totalStocks} stocks for ${formatMoney(totalRevenue, 3)}`, true, 'success');
+
+    log(ns, `已卖出 ${totalSharesLong.toLocaleString('en')} 股多头和 ${totalSharesShort.toLocaleString('en')} 股空头，` +
+        `涉及 ${totalStocks} 只股票，收回 ${formatMoney(totalRevenue, 3)}`, true, 'success');
 }
 
-/** @param {NS} ns **/
-/** @param {Player} playerStats **/
+/** 尝试购买 4S 市场数据 API
+ * @param {NS} ns
+ * @param {Player} playerStats
+ * @param {number} budget - 可用于购买 4S 的预算
+ * @returns {boolean} 是否刚刚购买了 4S API */
 async function tryGet4SApi(ns, playerStats, budget) {
-    if (await checkAccess(ns, 'has4SDataTixApi')) return false; // Only return true if we just bought it
+    if (await checkAccess(ns, 'has4SDataTixApi')) return false;
+
     const cost4sData = 1E9 * bitNodeMults.FourSigmaMarketDataCost;
     const cost4sApi = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost;
     const has4S = await checkAccess(ns, 'has4SData');
     const totalCost = (has4S ? 0 : cost4sData) + cost4sApi;
-    // Liquidate shares if it would allow us to afford 4S API data
-    if (totalCost > budget) /* Need to reserve some money to invest */
-        return false;
-    if (playerStats.money < totalCost)
-        await liquidate(ns);
+
+    if (totalCost > budget) return false;
+    if (playerStats.money < totalCost) await liquidate(ns);
+
     if (!has4S) {
         if (await tryBuy(ns, 'purchase4SMarketData'))
-            log(ns, `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} ` +
-                `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
+            log(ns, `SUCCESS: 已购买 4S 市场数据，花费 ${formatMoney(cost4sData)} ` +
+                `(BitNode 计时 ${formatDuration(getTimeInBitnode())})`, true, 'success');
         else
-            log(ns, 'ERROR attempting to purchase 4SMarketData!', false, 'error');
+            log(ns, 'ERROR: 购买 4S 市场数据失败！', false, 'error');
     }
+
     if (await tryBuy(ns, 'purchase4SMarketDataTixApi')) {
-        log(ns, `SUCCESS: Purchased 4SMarketDataTixApi for ${formatMoney(cost4sApi)} ` +
-            `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
+        log(ns, `SUCCESS: 已购买 4S 市场数据 Tix API，花费 ${formatMoney(cost4sApi)} ` +
+            `(BitNode 计时 ${formatDuration(getTimeInBitnode())})`, true, 'success');
         return true;
     } else {
-        log(ns, 'ERROR attempting to purchase 4SMarketDataTixApi!', false, 'error');
+        log(ns, 'ERROR: 购买 4S 市场数据 Tix API 失败！', false, 'error');
     }
     return false;
 }
 
-/** @param {NS} ns
- * @param {"hasWseAccount"|"hasTixApiAccess"|"has4SData"|"has4SDataTixApi"} stockFn
- * Helper to check for one of the stock access functions */
+/** 检查是否拥有某股票访问功能
+ * @param {NS} ns
+ * @param {"hasWseAccount"|"hasTixApiAccess"|"has4SData"|"has4SDataTixApi"} stockFn */
 async function checkAccess(ns, stockFn) {
-    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`)
+    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`);
 }
 
-/** @param {NS} ns
- * @param {"purchaseWseAccount"|"purchaseTixApi"|"purchase4SMarketData"|"purchase4SMarketDataTixApi"} stockFn
- * Helper to try and buy a stock access. Yes, the code is the same as above, but I wanted to be explicit. */
+/** 尝试购买某股票访问功能
+ * @param {NS} ns
+ * @param {"purchaseWseAccount"|"purchaseTixApi"|"purchase4SMarketData"|"purchase4SMarketDataTixApi"} stockFn */
 async function tryBuy(ns, stockFn) {
-    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`)
+    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`);
 }
 
-/** @param {NS} ns
- * @param {number} budget - The amount we are willing to spend on WSE and API access
- * Tries to purchase access to the stock market **/
+/** 尝试获取股票市场访问权限
+ * @param {NS} ns
+ * @param {number} budget - 愿意花费的预算
+ * @returns {boolean} 是否已拥有访问权限 */
 async function tryGetStockMarketAccess(ns, budget) {
-    if (await checkAccess(ns, 'hasTixApiAccess')) return true; // Already have access
+    if (await checkAccess(ns, 'hasTixApiAccess')) return true;
+
     const costWseAccount = 200E6;
     const costTixApi = 5E9;
     const hasWSE = await checkAccess(ns, 'hasWseAccount');
     const totalCost = (hasWSE ? 0 : costWseAccount) + costTixApi;
+
     if (totalCost > budget) return false;
+
     if (!hasWSE) {
         if (await tryBuy(ns, 'purchaseWseAccount'))
-            log(ns, `SUCCESS: Purchased a WSE (stockmarket) account for ${formatMoney(costWseAccount)} ` +
-                `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
+            log(ns, `SUCCESS: 已购买 WSE 账户，花费 ${formatMoney(costWseAccount)} ` +
+                `(BitNode 计时 ${formatDuration(getTimeInBitnode())})`, true, 'success');
         else
-            log(ns, 'ERROR attempting to purchase WSE account!', false, 'error');
+            log(ns, 'ERROR: 购买 WSE 账户失败！', false, 'error');
     }
+
     if (await tryBuy(ns, 'purchaseTixApi')) {
-        log(ns, `SUCCESS: Purchased Tix (stockmarket) Api access for ${formatMoney(costTixApi)} ` +
-            `(At ${formatDuration(getTimeInBitnode())} into BitNode)`, true, 'success');
+        log(ns, `SUCCESS: 已购买 Tix API 访问权限，花费 ${formatMoney(costTixApi)} ` +
+            `(BitNode 计时 ${formatDuration(getTimeInBitnode())})`, true, 'success');
         return true;
-    } else
-        log(ns, 'ERROR attempting to purchase Tix Api!', false, 'error');
+    } else {
+        log(ns, 'ERROR: 购买 Tix API 失败！', false, 'error');
+    }
     return false;
 }
 
+// ============================================================
+// HUD 初始化
+// ============================================================
+
+/** 初始化 HUD 显示元素 */
 function initializeHud() {
     const d = eval("document");
     let htmlDisplay = d.getElementById("stock-display-1");
     if (htmlDisplay !== null) return htmlDisplay;
-    // Get the custom display elements in HUD.
+
+    // 获取 HUD 中的自定义显示元素
     let customElements = d.getElementById("overview-extra-hook-0").parentElement.parentElement;
-    // Make a clone of the hook for extra hud elements, and move it up under money
+    // 克隆 hook 元素，插入到资金显示下方
     let stockValueTracker = customElements.cloneNode(true);
-    // Remove any nested elements created by stats.js
+    // 清理嵌套元素
     stockValueTracker.querySelectorAll("p > p").forEach(el => el.parentElement.removeChild(el));
-    // Change ids since duplicate id's are invalid
+    // 修改 id 防止重复
     stockValueTracker.querySelectorAll("p").forEach((el, i) => el.id = "stock-display-" + i);
-    // Get out output element
+    // 获取输出元素
     htmlDisplay = stockValueTracker.querySelector("#stock-display-1");
-    // Display label and default value
+    // 设置标签和默认值
     stockValueTracker.querySelectorAll("p")[0].innerText = "Stock";
-    htmlDisplay.innerText = "$0.000 "
-    // Insert our element right after Money
+    htmlDisplay.innerText = "$0.000 ";
+    // 插入到 Money 显示之后
     customElements.parentElement.insertBefore(stockValueTracker, customElements.parentElement.childNodes[2]);
     return htmlDisplay;
 }
